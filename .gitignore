@@ -1,0 +1,38 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+
+# --- виртуальные окружения ---
+.venv/
+venv/
+env/
+ENV/
+
+# --- PyInstaller сборка ---
+build/
+dist/
+*.manifest
+# spec оставляем в репо как пример конфигурации
+# *.spec
+
+# --- пользовательские файлы программы (генерируются при запуске) ---
+overlay_config.json
+chat_history.txt
+
+# --- IDE ---
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# --- ОС ---
+.DS_Store
+Thumbs.db
+desktop.ini
