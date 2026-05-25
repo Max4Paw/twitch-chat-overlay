@@ -3,6 +3,28 @@ Twitch Chat Overlay
 
 Прозрачное окно поверх всех приложений с чатом любого Twitch-канала.
 
+OBS (Dock + Browser Source)
+---------------------------
+Программа поднимает локальную веб-страницу (по умолчанию 127.0.0.1:17655)
+и отдаёт две ссылки:
+
+  * Dock (Custom Browser Dock):
+      http://127.0.0.1:17655/obs/dock
+
+  * Browser Source (источник "Браузер"):
+      http://127.0.0.1:17655/obs/browser
+
+Как добавить Dock (панель) в OBS:
+  View → Docks → Custom Browser Docks… → вставьте ссылку дока.
+
+Как добавить Browser Source (как источник):
+  Sources → + → Browser → вставьте ссылку browser-оверлея.
+  Важно: опция "Local file" должна быть выключена (используется URL).
+
+Настройки сохраняются в overlay_config.json:
+  obs_web_enabled (по умолчанию true)
+  obs_web_port    (по умолчанию 17655)
+
 УСТАНОВКА
 ---------
 1. Установите Python 3.10+ (https://www.python.org/) — при установке
