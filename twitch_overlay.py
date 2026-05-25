@@ -2635,9 +2635,6 @@ class ChatOverlay(tk.Tk):
         BG     = self.BG
         BG_E   = self.BG_ELEV
 
-        # Разделитель между карточками (card / pill)
-
-
         if style == "none":
             for tn in ("row_even", "row_odd"):
                 self.text.tag_configure(
