@@ -6,12 +6,14 @@ REM ============================================================
 
 cd /d "%~dp0"
 
-if not exist icon.ico (
-    echo [ERR] Не найден icon.ico рядом со скриптом — сборка остановлена.
+if not exist assets\icon.ico (
+    echo [ERR] Не найден assets\icon.ico — сборка остановлена.
     pause
     exit /b 1
 )
 
+echo Сборка из chat_overlay.py (основной код программы)
+echo.
 echo [1/5] Установка зависимостей...
 python -m pip install --upgrade pip >nul
 python -m pip install pyinstaller pystray Pillow keyboard
@@ -30,11 +32,11 @@ python -m PyInstaller ^
     --windowed ^
     --noupx ^
     --name=twitch_overlay ^
-    --icon=icon.ico ^
-    --add-data "icon.ico;." ^
-    --add-data "icon.png;." ^
+    --icon=assets\icon.ico ^
+    --add-data "assets;assets" ^
+    --add-data "web;web" ^
     --clean --noconfirm ^
-    twitch_overlay.py
+    chat_overlay.py
 
 if not exist dist\twitch_overlay.exe (
     echo [ERR] Сборка не удалась. Смотрите сообщения выше.

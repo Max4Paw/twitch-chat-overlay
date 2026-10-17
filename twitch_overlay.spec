@@ -2,10 +2,10 @@
 
 
 a = Analysis(
-    ['twitch_overlay.py'],
+    ['chat_overlay.py'],
     pathex=[],
     binaries=[],
-    datas=[('icon.ico', '.'), ('icon.png', '.')],
+    datas=[('assets', 'assets'), ('web', 'web')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -35,5 +35,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['icon.ico'],
+    icon=['assets/icon.ico'],
 )

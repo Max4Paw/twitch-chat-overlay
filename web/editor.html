@@ -1,0 +1,756 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Редактор оформления чата</title>
+  <style>
+    :root {
+      --bg: #0e0f1a; --elev: #161827; --panel: #1a1d2e; --input: #1e2133; --border: #2a2e44;
+      --text: #e6e8ef; --muted: #8b91a7; --dim: #5a607a; --accent: #9146ff; --accent-h: #a970ff;
+      --ok: #5dd39e; --warn: #ffb347; --danger: #ff5e7e;
+      color-scheme: dark;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; }
+    body { background: var(--bg); color: var(--text); font: 13px/1.4 "Segoe UI", system-ui, Arial, sans-serif;
+           display: grid; grid-template-columns: 400px 1fr; overflow: hidden; }
+    button, input, select { font: inherit; color: inherit; }
+
+    /* ---------- sidebar ---------- */
+    aside { display: flex; flex-direction: column; min-height: 0; background: var(--elev); border-right: 1px solid var(--border); }
+    .top { padding: 14px 16px 12px; border-bottom: 1px solid var(--border); background: var(--panel); }
+    .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 15px; }
+    .brand i { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 10px var(--accent); }
+    .url { margin-top: 10px; display: flex; gap: 6px; }
+    .url input { flex: 1; min-width: 0; background: var(--input); border: 1px solid var(--border); border-radius: 7px; padding: 7px 9px; color: var(--muted); }
+    #scroll { flex: 1; overflow-y: auto; padding: 6px 0 20px; }
+    #scroll::-webkit-scrollbar { width: 10px; }
+    #scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 10px; border: 3px solid var(--elev); }
+
+    details { border-bottom: 1px solid var(--border); }
+    summary { list-style: none; cursor: pointer; padding: 12px 16px; font-weight: 600; display: flex; align-items: center; gap: 10px; user-select: none; }
+    summary::-webkit-details-marker { display: none; }
+    summary::after { content: ""; margin-left: auto; width: 7px; height: 7px; border-right: 2px solid var(--dim); border-bottom: 2px solid var(--dim); transform: rotate(-45deg); transition: transform .15s; }
+    details[open] > summary::after { transform: rotate(45deg); }
+    summary .ic { width: 22px; height: 22px; border-radius: 6px; display: grid; place-items: center; background: var(--input); font-size: 12px; }
+    .sec { padding: 0 16px 14px; display: grid; gap: 10px; }
+
+    .row { display: grid; grid-template-columns: 128px 1fr; align-items: center; gap: 10px; min-height: 30px; }
+    .row > label { color: var(--muted); }
+    .row.full { grid-template-columns: 1fr; }
+    .sub { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; margin-top: 4px; }
+
+    .seg { display: flex; background: var(--input); border: 1px solid var(--border); border-radius: 8px; padding: 2px; gap: 2px; }
+    .seg button { flex: 1; border: 0; background: transparent; padding: 5px 6px; border-radius: 6px; cursor: pointer; color: var(--muted); white-space: nowrap; }
+    .seg button:hover { color: var(--text); }
+    .seg button.on { background: var(--accent); color: #fff; }
+
+    select, input[type=text], input[type=number] { width: 100%; background: var(--input); border: 1px solid var(--border); border-radius: 7px; padding: 6px 8px; outline: none; }
+    select:focus, input[type=text]:focus, input[type=number]:focus { border-color: var(--accent); }
+
+    .rng { display: flex; align-items: center; gap: 8px; }
+    .rng input[type=range] { flex: 1; accent-color: var(--accent); min-width: 0; }
+    .rng input[type=number] { width: 62px; padding: 4px 6px; text-align: right; }
+
+    .clr { display: flex; align-items: center; gap: 8px; }
+    .clr input[type=color] { width: 34px; height: 28px; padding: 0; border: 1px solid var(--border); border-radius: 7px; background: none; cursor: pointer; }
+    .clr input[type=color]::-webkit-color-swatch-wrapper { padding: 2px; }
+    .clr input[type=color]::-webkit-color-swatch { border: 0; border-radius: 5px; }
+    .clr input[type=text] { width: 96px; font-family: Consolas, monospace; }
+
+    .tgl { position: relative; width: 38px; height: 22px; display: inline-block; }
+    .tgl input { opacity: 0; width: 0; height: 0; }
+    .tgl span { position: absolute; inset: 0; background: var(--input); border: 1px solid var(--border); border-radius: 22px; cursor: pointer; transition: .15s; }
+    .tgl span::after { content: ""; position: absolute; left: 3px; top: 3px; width: 14px; height: 14px; border-radius: 50%; background: var(--muted); transition: .15s; }
+    .tgl input:checked + span { background: var(--accent); border-color: var(--accent); }
+    .tgl input:checked + span::after { left: 19px; background: #fff; }
+
+    .btn { border: 1px solid var(--border); background: var(--input); padding: 7px 12px; border-radius: 8px; cursor: pointer; white-space: nowrap; }
+    .btn:hover { border-color: var(--accent); }
+    .btn.pri { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+    .btn.pri:hover { background: var(--accent-h); }
+    .btn.sm { padding: 4px 9px; font-size: 12px; }
+
+    /* пресеты */
+    .presets { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+    .preset { border: 1px solid var(--border); background: var(--input); border-radius: 10px; padding: 8px; cursor: pointer; text-align: left; display: grid; gap: 6px; }
+    .preset:hover { border-color: var(--accent); }
+    .preset .sw { height: 34px; border-radius: 7px; background: #2b2f45 repeating-conic-gradient(#30344c 0 25%, #272a3e 0 50%) 0 0/12px 12px; display: flex; align-items: center; padding: 0 8px; overflow: hidden; }
+    .preset .sw b { font-size: 11px; padding: 3px 8px; white-space: nowrap; }
+    .preset span { font-weight: 600; font-size: 12px; }
+
+    /* картинка */
+    .img-box { display: grid; gap: 8px; }
+    .drop { border: 1.5px dashed var(--border); border-radius: 10px; padding: 10px; display: flex; gap: 10px; align-items: center; background: var(--bg); }
+    .drop.over { border-color: var(--accent); background: #1a1530; }
+    .drop .th { width: 64px; height: 44px; border-radius: 6px; flex: none; background: repeating-conic-gradient(#30344c 0 25%, #272a3e 0 50%) 0 0/10px 10px; display: grid; place-items: center; overflow: hidden; }
+    .drop .th img { max-width: 100%; max-height: 100%; }
+    .drop .meta { flex: 1; min-width: 0; display: grid; gap: 6px; }
+    .drop .meta small { color: var(--dim); }
+    .samples { display: flex; gap: 6px; flex-wrap: wrap; }
+
+    .slicer { position: relative; display: inline-block; max-width: 100%; user-select: none; touch-action: none;
+              background: repeating-conic-gradient(#30344c 0 25%, #272a3e 0 50%) 0 0/12px 12px; border-radius: 6px; }
+    .slicer img { display: block; max-width: 100%; max-height: 220px; image-rendering: auto; }
+    .slicer .ln { position: absolute; }
+    .slicer .ln.v { top: 0; bottom: 0; width: 11px; margin-left: -5px; cursor: ew-resize; }
+    .slicer .ln.h { left: 0; right: 0; height: 11px; margin-top: -5px; cursor: ns-resize; }
+    .slicer .ln::after { content: ""; position: absolute; border: 0 dashed #ff4fd8; }
+    .slicer .ln.v::after { left: 5px; top: 0; bottom: 0; border-left-width: 1px; }
+    .slicer .ln.h::after { top: 5px; left: 0; right: 0; border-top-width: 1px; }
+    .slice-nums { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+    .slice-nums label { font-size: 11px; color: var(--dim); display: grid; gap: 3px; }
+    .slice-nums input { color: var(--text); }
+    .hint { color: var(--dim); font-size: 12px; }
+
+    .foot { border-top: 1px solid var(--border); padding: 12px 16px; display: grid; gap: 8px; background: var(--panel); }
+    .foot .r { display: flex; gap: 8px; align-items: center; }
+    #status { color: var(--muted); font-size: 12px; margin-left: auto; text-align: right; }
+    #status.dirty { color: var(--warn); }
+    #status.ok { color: var(--ok); }
+    #status.err { color: var(--danger); }
+
+    /* ---------- preview ---------- */
+    main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+    .bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--panel); }
+    .bar .grow { flex: 1; }
+    .bar .rng { width: 210px; }
+    .stage { flex: 1; min-height: 0; display: grid; place-items: center; padding: 24px; overflow: auto; position: relative; }
+    .stage.bg-checker { background: repeating-conic-gradient(#1c1f30 0 25%, #151726 0 50%) 0 0/24px 24px; }
+    .stage.bg-dark { background: #0a0a0f; }
+    .stage.bg-light { background: #e9ebf2; }
+    .stage.bg-game { background:
+        radial-gradient(ellipse at 20% 80%, #2f6f4f 0, transparent 50%),
+        radial-gradient(ellipse at 80% 20%, #f7b267 0, transparent 45%),
+        radial-gradient(ellipse at 60% 70%, #3d5a80 0, transparent 55%),
+        linear-gradient(160deg, #283c63, #121a2f 60%, #1f1d36); }
+    .frame { position: relative; height: min(680px, 100%); border: 1px dashed rgba(255,255,255,.25); border-radius: 4px; }
+    .stage.bg-light .frame { border-color: rgba(0,0,0,.25); }
+    .frame iframe { width: 100%; height: 100%; border: 0; display: block; background: transparent; color-scheme: normal; }
+    .frame .dim { position: absolute; top: -20px; right: 0; font-size: 11px; color: var(--dim); }
+
+    #toast { position: fixed; right: 18px; bottom: 18px; background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--accent);
+             padding: 10px 14px; border-radius: 8px; opacity: 0; transform: translateY(8px); transition: .2s; pointer-events: none; z-index: 10; }
+    #toast.on { opacity: 1; transform: none; }
+  </style>
+</head>
+<body>
+<aside>
+  <div class="top">
+    <div class="brand"><i></i>Оформление чата для OBS</div>
+    <div class="url">
+      <input id="obsUrl" type="text" readonly />
+      <button class="btn sm" id="copyUrl">Копировать</button>
+    </div>
+  </div>
+  <div id="scroll"></div>
+  <div class="foot">
+    <div class="r">
+      <button class="btn pri" id="save">Сохранить и применить</button>
+      <span id="status">загрузка…</span>
+    </div>
+    <div class="r">
+      <button class="btn sm" id="revert" title="Вернуть последнее сохранённое">Отменить изменения</button>
+      <button class="btn sm" id="export">Экспорт</button>
+      <button class="btn sm" id="import">Импорт</button>
+      <input type="file" id="importFile" accept=".json,application/json" hidden />
+    </div>
+  </div>
+</aside>
+<main>
+  <div class="bar">
+    <div class="seg" id="bgSeg">
+      <button data-v="checker" class="on">Шахматка</button>
+      <button data-v="game">Игра</button>
+      <button data-v="dark">Тёмный</button>
+      <button data-v="light">Светлый</button>
+    </div>
+    <div class="rng" title="Ширина Browser Source"><span class="hint">Ширина</span><input type="range" id="pw" min="240" max="1200" step="10" value="420" /><input type="number" id="pwn" value="420" /></div>
+    <div class="grow"></div>
+    <label class="hint" style="display:flex;gap:8px;align-items:center">Поток <span class="tgl"><input type="checkbox" id="flow" checked /><span></span></span></label>
+    <button class="btn sm" id="refill">Перезапустить</button>
+    <button class="btn sm" id="testObs" title="Отправить тестовое сообщение в настоящий OBS">Тест в OBS</button>
+  </div>
+  <div class="stage bg-checker" id="stage">
+    <div class="frame" id="frame"><span class="dim" id="dim"></span><iframe id="pv" src="/obs/browser?preview=1"></iframe></div>
+  </div>
+</main>
+<div id="toast"></div>
+
+<script src="/obs/overlay.js"></script>
+<script>
+(function () {
+  "use strict";
+  const CS = window.ChatStyle;
+  const $ = (s, r) => (r || document).querySelector(s);
+  const h = (tag, attrs, ...kids) => {
+    const e = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs || {})) {
+      if (k === "class") e.className = v;
+      else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+      else if (v !== undefined && v !== null && v !== false) e.setAttribute(k, v === true ? "" : v);
+    }
+    for (const k of kids.flat()) if (k != null) e.append(k.nodeType ? k : document.createTextNode(k));
+    return e;
+  };
+
+  let state = CS.normalize({});
+  let savedJson = "";
+  const imgSizes = {};
+
+  // ---------- путь a.b.c ----------
+  const get = (path) => path.split(".").reduce((o, k) => (o == null ? o : o[k]), state);
+  function set(path, val) {
+    const ks = path.split("."); let o = state;
+    for (let i = 0; i < ks.length - 1; i++) o = o[ks[i]];
+    o[ks[ks.length - 1]] = val;
+    changed();
+  }
+
+  // ---------- примеры картинок ----------
+  const svg = (s) => "data:image/svg+xml," + encodeURIComponent(s);
+  const SAMPLES = [
+    { name: "Рамка", slice: [30, 30, 30, 30], url: svg(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">' +
+      '<rect x="4" y="4" width="88" height="88" rx="10" fill="#1b1030" fill-opacity=".92"/>' +
+      '<rect x="9" y="9" width="78" height="78" rx="6" fill="none" stroke="#e9c46a" stroke-width="2"/>' +
+      '<rect x="4" y="4" width="88" height="88" rx="10" fill="none" stroke="#7a5c1e" stroke-width="2"/>' +
+      '<g fill="#e9c46a"><path d="M9 3l6 6-6 6-6-6z"/><path d="M87 3l6 6-6 6-6-6z"/><path d="M9 81l6 6-6 6-6-6z"/><path d="M87 81l6 6-6 6-6-6z"/></g></svg>') },
+    { name: "Облачко", slice: [22, 22, 38, 38], text: "#1b1d2a", url: svg(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">' +
+      '<path d="M18 2h64a16 16 0 0 1 16 16v48a16 16 0 0 1-16 16H40l-16 16 2-16h-8A16 16 0 0 1 2 66V18A16 16 0 0 1 18 2z" fill="#ffffff" stroke="#9146ff" stroke-width="3"/></svg>') },
+    { name: "Неон-лента", slice: [20, 26, 20, 26], url: svg(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="60" viewBox="0 0 80 60">' +
+      '<defs><linearGradient id="g" x1="0" x2="1"><stop offset="0" stop-color="#00e5ff"/><stop offset="1" stop-color="#ff2bd6"/></linearGradient></defs>' +
+      '<path d="M14 4h62l-10 26 10 26H4l10-26z" fill="#0b0820" fill-opacity=".9" stroke="url(#g)" stroke-width="3" stroke-linejoin="round"/></svg>') },
+  ];
+
+  // ---------- описание контролов ----------
+  const T = (p) => get(p);
+  const isFill = (base) => () => ["color", "gradient"].includes(T(base + ".type"));
+  const notNone = (base) => () => T(base + ".type") !== "none";
+  const isImg = (base) => () => T(base + ".type") === "image";
+
+  function plateFields(base, isMsg) {
+    const f = [
+      { k: base + ".type", t: "seg", l: "Тип", o: [["none", "Нет"], ["color", "Цвет"], ["gradient", "Градиент"], ["image", "Картинка"]], rebuild: true },
+      { k: base + ".color", t: "color", l: "Цвет", show: isFill(base) },
+      { k: base + ".color2", t: "color", l: "Цвет 2", show: () => T(base + ".type") === "gradient" },
+      { k: base + ".angle", t: "range", l: "Угол", min: 0, max: 360, step: 5, show: () => T(base + ".type") === "gradient" },
+      { k: base + ".opacity", t: "range", l: "Непрозрачность", min: 0, max: 1, step: 0.01, show: isFill(base) },
+      { k: base + ".tint", t: "range", l: "Цвет ника в фоне", min: 0, max: 1, step: 0.01, show: isFill(base) },
+      { k: base + ".blur", t: "range", l: "Размытие фона", min: 0, max: 30, step: 1, show: isFill(base) },
+      { k: base + ".image", t: "image", l: "Изображение", show: isImg(base), base },
+      { k: base + ".imgMode", t: "select", l: "Подгонка", show: isImg(base), rebuild: true,
+        o: [["slice", "9-slice (тянется по тексту)"], ["stretch", "Растянуть"], ["cover", "Заполнить (обрезать)"], ["tile", "Плитка"]] },
+      { k: base + ".slice", t: "slice", l: "Края", show: () => isImg(base)() && T(base + ".imgMode") === "slice" && T(base + ".image"), base },
+      { k: base + ".sliceScale", t: "range", l: "Масштаб краёв", min: 0.1, max: 3, step: 0.05, show: () => isImg(base)() && T(base + ".imgMode") === "slice" },
+      { k: base + ".imgRepeat", t: "seg", l: "Середина", o: [["stretch", "Тянуть"], ["round", "Повтор"]], show: () => isImg(base)() && T(base + ".imgMode") === "slice" },
+      { k: base + ".imgOpacity", t: "range", l: "Непрозрачность", min: 0, max: 1, step: 0.01, show: isImg(base) },
+      { k: base + ".hue", t: "range", l: "Оттенок", min: -180, max: 180, step: 1, show: isImg(base) },
+      { k: base + ".radius", t: "range", l: "Скругление", min: 0, max: 40, step: 1, show: () => notNone(base)() && !(isImg(base)() && T(base + ".imgMode") === "slice") },
+      { k: base + ".borderW", t: "range", l: "Обводка", min: 0, max: 8, step: 1, show: isFill(base) },
+      { k: base + ".borderColor", t: "color", l: "Цвет обводки", show: () => isFill(base)() && T(base + ".borderW") > 0 },
+      { k: base + ".borderOp", t: "range", l: "Прозр. обводки", min: 0, max: 1, step: 0.01, show: () => isFill(base)() && T(base + ".borderW") > 0 },
+      { k: base + ".shadow", t: "range", l: "Тень", min: 0, max: 40, step: 1, show: notNone(base) },
+      { k: base + ".shadowColor", t: "color", l: "Цвет тени", show: () => notNone(base)() && T(base + ".shadow") > 0 },
+      { k: base + ".shadowOp", t: "range", l: "Сила тени", min: 0, max: 1, step: 0.01, show: () => notNone(base)() && T(base + ".shadow") > 0 },
+      { k: base + ".padX", t: "range", l: "Отступ по бокам", min: 0, max: 60, step: 1 },
+      { k: base + ".padY", t: "range", l: "Отступ сверху/снизу", min: 0, max: 40, step: 1 },
+    ];
+    if (isMsg) f.push(
+      { sub: "Акцент" , show: notNone(base) },
+      { k: base + ".accent", t: "seg", l: "Акцент", o: [["none", "Нет"], ["left", "Слева"], ["bottom", "Снизу"], ["glow", "Свечение"]], show: notNone(base) },
+      { k: base + ".accentW", t: "range", l: "Толщина", min: 1, max: 16, step: 1, show: () => notNone(base)() && T(base + ".accent") !== "none" },
+      { k: base + ".accentMode", t: "seg", l: "Цвет акцента", o: [["nick", "Цвет ника"], ["fixed", "Свой"]], show: () => notNone(base)() && T(base + ".accent") !== "none" },
+      { k: base + ".accentColor", t: "color", l: "Свой цвет", show: () => notNone(base)() && T(base + ".accent") !== "none" && T(base + ".accentMode") === "fixed" },
+    );
+    return f;
+  }
+
+  const fontOpts = () => {
+    const cur = T("text.font");
+    const all = [...Object.keys(CS.GOOGLE_FONTS), ...CS.SYSTEM_FONTS];
+    return { groups: [["Google Fonts (с кириллицей)", Object.keys(CS.GOOGLE_FONTS)], ["Системные", CS.SYSTEM_FONTS]]
+      .concat(all.includes(cur) ? [] : [["Свой", [cur]]]) };
+  };
+
+  const SECTIONS = [
+    { id: "presets", icon: "✦", title: "Готовые стили", open: true, custom: buildPresets },
+    { id: "mypresets", icon: "☰", title: "Мои пресеты", custom: buildMyPresets },
+    { id: "layout", icon: "▤", title: "Расположение", fields: [
+      { k: "layout.align", t: "seg", l: "Прижать", o: [["bottom", "Вниз"], ["top", "Вверх"]] },
+      { k: "layout.width", t: "seg", l: "Ширина плашки", o: [["fit", "По тексту"], ["full", "Во всю ширину"]] },
+      { k: "layout.hAlign", t: "seg", l: "Сторона", o: [["left", "Слева"], ["right", "Справа"]], show: () => T("layout.width") === "fit" },
+      { k: "layout.stacked", t: "toggle", l: "Ник над текстом" },
+      { k: "layout.gap", t: "range", l: "Между сообщ.", min: 0, max: 40, step: 1 },
+      { k: "layout.pad", t: "range", l: "Отступ от края", min: 0, max: 80, step: 1 },
+      { k: "layout.max", t: "range", l: "Макс. сообщений", min: 1, max: 100, step: 1 },
+      { k: "layout.emote", t: "range", l: "Размер эмоутов", min: 1, max: 3, step: 0.05 },
+      { k: "layout.sep", t: "text", l: "Разделитель", ph: "например  :  или  ›", show: () => !T("layout.stacked") },
+      { k: "layout.showBadges", t: "toggle", l: "Значки ролей" },
+      { k: "layout.showPlatform", t: "toggle", l: "Значок платформы" },
+      { k: "layout.showTime", t: "toggle", l: "Время" },
+    ] },
+    { id: "text", icon: "Aa", title: "Текст", fields: [
+      { k: "text.font", t: "select", l: "Шрифт", o: fontOpts, rebuild: true },
+      { k: "text.font", t: "text", l: "Свой шрифт", ph: "имя установленного шрифта", lazy: true, rebuild: true },
+      { k: "text.size", t: "range", l: "Размер", min: 8, max: 64, step: 1 },
+      { k: "text.weight", t: "range", l: "Жирность", min: 100, max: 900, step: 100 },
+      { k: "text.lineHeight", t: "range", l: "Межстрочный", min: 1, max: 2.2, step: 0.05 },
+      { k: "text.color", t: "color", l: "Цвет текста" },
+      { k: "text.shadow", t: "select", l: "Тень текста", o: [["none", "Нет"], ["soft", "Мягкая"], ["outline", "Обводка"], ["hard", "Жёсткая"], ["glow", "Свечение"]] },
+      { k: "text.shadowColor", t: "color", l: "Цвет тени", show: () => T("text.shadow") !== "none" },
+    ] },
+    { id: "nick", icon: "@", title: "Ник", fields: [
+      { k: "nick.colorMode", t: "seg", l: "Цвет ника", o: [["twitch", "Из Twitch"], ["hash", "Авто"], ["fixed", "Свой"]] },
+      { k: "nick.color", t: "color", l: "Свой цвет", show: () => T("nick.colorMode") === "fixed" },
+      { k: "nick.weight", t: "range", l: "Жирность", min: 100, max: 900, step: 100 },
+      { k: "nick.upper", t: "toggle", l: "ЗАГЛАВНЫЕ" },
+    ] },
+    { id: "plate", icon: "▭", title: "Плашка сообщения", open: true, fields: () => plateFields("plate", true) },
+    { id: "nickPlate", icon: "◖", title: "Плашка ника", fields: () => plateFields("nickPlate", false) },
+    { id: "anim", icon: "↯", title: "Анимация и время жизни", fields: [
+      { k: "layout.anim", t: "select", l: "Появление", o: [["none", "Без анимации"], ["fade", "Проявление"], ["slide-left", "Выезд слева"], ["slide-right", "Выезд справа"], ["slide-up", "Снизу вверх"], ["pop", "Прыжок"]] },
+      { k: "layout.animMs", t: "range", l: "Длительность, мс", min: 100, max: 1500, step: 10 },
+      { k: "layout.lifetime", t: "range", l: "Скрывать через, с", min: 0, max: 120, step: 1, hint: "0 — сообщения не исчезают" },
+    ] },
+    { id: "roles", icon: "♛", title: "Стример, модераторы, VIP", fields: () => {
+      const out = [];
+      for (const [r, name] of [["broadcaster", "Стример"], ["moderator", "Модераторы"], ["vip", "VIP"]]) {
+        const on = () => T(`roles.${r}.enabled`);
+        out.push(
+          { sub: name },
+          { k: `roles.${r}.enabled`, t: "toggle", l: "Свой стиль" },
+          { k: `roles.${r}.color`, t: "color", l: "Цвет роли", show: on },
+          { k: `roles.${r}.border`, t: "toggle", l: "Рамка и свечение", show: on },
+          { k: `roles.${r}.plate`, t: "toggle", l: "Фон цветом роли", show: on },
+          { k: `roles.${r}.opacity`, t: "range", l: "Непрозрачность фона", min: 0, max: 1, step: 0.01, show: () => on() && T(`roles.${r}.plate`) },
+          { k: `roles.${r}.nick`, t: "toggle", l: "Ник цветом роли", show: on },
+        );
+      }
+      return out;
+    } },
+    { id: "featured", icon: "📺", title: "Сообщение на экран", fields: [
+      { t: "note", l: "Отдельный Browser Source: " + location.origin + "/obs/featured — сообщение выбирается кликом в Dock или ПКМ в окне программы." },
+      { k: "featured.scale", t: "range", l: "Масштаб", min: 0.8, max: 3, step: 0.05 },
+      { k: "featured.duration", t: "range", l: "Показывать, с", min: 0, max: 120, step: 1, hint: "0 — пока не уберёшь вручную" },
+      { k: "featured.position", t: "seg", l: "Где", o: [["bottom", "Снизу"], ["center", "Центр"], ["top", "Сверху"], ["bottom-left", "Слева"]] },
+      { t: "button", l: "Показать пример в OBS", fn: () => featureDemo() },
+    ] },
+    { id: "events", icon: "🎁", title: "События: сабки, гифты, рейды", fields: [
+      { k: "events.enabled", t: "toggle", l: "Показывать", hint: "подписки, подарки, рейды, битсы, объявления" },
+      { k: "events.frame", t: "toggle", l: "Рамка и свечение", show: () => T("events.enabled") },
+      { k: "events.big", t: "toggle", l: "Крупный заголовок", show: () => T("events.enabled") },
+      { sub: "Цвета", show: () => T("events.enabled") },
+      { k: "events.colors.sub", t: "color", l: "Подписка", show: () => T("events.enabled") },
+      { k: "events.colors.gift", t: "color", l: "Подарок", show: () => T("events.enabled") },
+      { k: "events.colors.raid", t: "color", l: "Рейд", show: () => T("events.enabled") },
+      { k: "events.colors.cheer", t: "color", l: "Битсы", show: () => T("events.enabled") },
+      { k: "events.colors.announcement", t: "color", l: "Объявление", show: () => T("events.enabled") },
+    ] },
+    { id: "hl", icon: "★", title: "Подсветка упоминаний", fields: [
+      { k: "hl.enabled", t: "toggle", l: "Подсвечивать", hint: "слова задаются в настройках программы → Фильтры" },
+      { k: "hl.color", t: "color", l: "Цвет", show: () => T("hl.enabled") },
+    ] },
+  ];
+
+  // ---------- построение UI ----------
+  const openState = {};
+  const scroll = $("#scroll");
+
+  function build() {
+    const st = scroll.scrollTop;
+    scroll.textContent = "";
+    for (const sec of SECTIONS) {
+      const d = h("details", { open: openState[sec.id] ?? sec.open ?? false });
+      d.addEventListener("toggle", () => { openState[sec.id] = d.open; });
+      d.append(h("summary", {}, h("span", { class: "ic" }, sec.icon), sec.title));
+      const body = h("div", { class: "sec" });
+      if (sec.custom) sec.custom(body);
+      else {
+        const fields = typeof sec.fields === "function" ? sec.fields() : sec.fields;
+        for (const f of fields) {
+          if (f.show && !f.show()) continue;
+          if (f.sub) { body.append(h("div", { class: "sub" }, f.sub)); continue; }
+          body.append(control(f));
+        }
+      }
+      d.append(body);
+      scroll.append(d);
+    }
+    scroll.scrollTop = st;
+  }
+
+  function control(f) {
+    if (f.t === "note") return h("div", { class: "hint" }, f.l);
+    if (f.t === "button") return h("div", {}, h("button", { class: "btn sm", onclick: f.fn }, f.l));
+    const v = get(f.k);
+    const done = (nv) => { set(f.k, nv); if (f.rebuild || needsRebuild(f.k)) build(); };
+    let input;
+    switch (f.t) {
+      case "seg":
+        input = h("div", { class: "seg" }, f.o.map(([val, lab]) =>
+          h("button", { class: val === v ? "on" : "", onclick: () => done(val) }, lab)));
+        break;
+      case "select": {
+        const opts = typeof f.o === "function" ? f.o() : f.o;
+        input = h("select", { onchange: (e) => done(e.target.value) });
+        if (opts.groups) for (const [g, items] of opts.groups)
+          input.append(h("optgroup", { label: g }, items.map((it) => h("option", { value: it, selected: it === v }, it))));
+        else for (const [val, lab] of opts) input.append(h("option", { value: val, selected: val === v }, lab));
+        break;
+      }
+      case "range": {
+        const nb = h("input", { type: "number", min: f.min, max: f.max, step: f.step, value: v });
+        const rg = h("input", { type: "range", min: f.min, max: f.max, step: f.step, value: v });
+        rg.addEventListener("input", () => { nb.value = rg.value; done(Number(rg.value)); });
+        nb.addEventListener("change", () => { rg.value = nb.value; done(Number(nb.value)); });
+        input = h("div", { class: "rng" }, rg, nb);
+        break;
+      }
+      case "color": {
+        const pick = h("input", { type: "color", value: /^#[0-9a-f]{6}$/i.test(v) ? v : "#ffffff" });
+        const hex = h("input", { type: "text", value: v, maxlength: 7 });
+        pick.addEventListener("input", () => { hex.value = pick.value; set(f.k, pick.value); });
+        hex.addEventListener("change", () => { if (/^#[0-9a-f]{6}$/i.test(hex.value)) { pick.value = hex.value; set(f.k, hex.value); } });
+        input = h("div", { class: "clr" }, pick, hex);
+        break;
+      }
+      case "toggle": {
+        const cb = h("input", { type: "checkbox", checked: !!v });
+        cb.addEventListener("change", () => done(cb.checked));
+        input = h("label", { class: "tgl" }, cb, h("span"));
+        break;
+      }
+      case "text": {
+        input = h("input", { type: "text", value: v, placeholder: f.ph || "" });
+        input.addEventListener(f.lazy ? "change" : "input", () => done(input.value));
+        break;
+      }
+      case "image": return imageControl(f);
+      case "slice": return sliceControl(f);
+    }
+    const row = h("div", { class: "row" }, h("label", {}, f.l), input);
+    if (f.hint) return h("div", {}, row, h("div", { class: "hint", style: "margin:2px 0 0 138px" }, f.hint));
+    return row;
+  }
+
+  // поля, от которых зависит видимость других
+  function needsRebuild(k) {
+    return /(\.type|\.imgMode|\.accent|\.accentMode|\.borderW|\.shadow|colorMode|\.stacked|layout\.width|text\.shadow|\.enabled|roles\.\w+\.plate)$/.test(k)
+      && !/shadow(Color|Op)$/.test(k);
+  }
+
+  // ---------- пресеты ----------
+  function buildPresets(body) {
+    const grid = h("div", { class: "presets" });
+    for (const [key, p] of Object.entries(CS.PRESETS)) {
+      const s = CS.fromPreset(key);
+      const pl = s.plate;
+      const b = h("b", {}, "Ник: привет!");
+      b.style.color = s.text.color;
+      b.style.fontWeight = s.text.weight;
+      b.style.borderRadius = Math.min(pl.radius, 12) + "px";
+      if (pl.type === "gradient") b.style.background = `linear-gradient(${pl.angle}deg, ${pl.color}, ${pl.color2})`;
+      else if (pl.type === "color") b.style.background = pl.color + Math.round(pl.opacity * 255).toString(16).padStart(2, "0");
+      if (pl.borderW) b.style.border = `${Math.min(pl.borderW, 2)}px solid ${pl.borderColor}`;
+      if (pl.accent === "left") b.style.borderLeft = "3px solid #ff7b72";
+      if (pl.accent === "glow") b.style.boxShadow = "0 0 8px #a970ff";
+      if (pl.type === "none") b.style.textShadow = "0 0 2px #000, 1px 1px 0 #000";
+      grid.append(h("button", { class: "preset", onclick: () => applyPreset(key) },
+        h("div", { class: "sw" }, b), h("span", {}, p.name)));
+    }
+    body.append(grid, h("div", { class: "hint" }, "Пресет — это отправная точка: дальше всё можно подкрутить ниже."));
+  }
+  // ---------- мои пресеты (хранятся в программе) ----------
+  let myPresets = {};
+  async function loadMyPresets() {
+    try { const r = await fetch("/obs/presets.json", { cache: "no-store" }); if (r.ok) myPresets = await r.json(); } catch (e) {}
+  }
+  async function presetAction(body) {
+    const r = await fetch("/obs/presets", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    await loadMyPresets();
+  }
+  function buildMyPresets(body) {
+    const name = h("input", { type: "text", placeholder: "название, например «Игра»", maxlength: 60 });
+    const save = async () => {
+      const n = name.value.trim();
+      if (!n) { toast("Введи название пресета", true); return; }
+      try { await presetAction({ action: "save", name: n, style: state }); toast("Пресет «" + n + "» сохранён"); build(); }
+      catch (e) { toast("Не удалось сохранить: " + e.message, true); }
+    };
+    name.addEventListener("keydown", (e) => { if (e.key === "Enter") save(); });
+    body.append(h("div", { style: "display:flex;gap:6px" }, name, h("button", { class: "btn sm pri", onclick: save }, "Сохранить текущий")));
+    const names = Object.keys(myPresets).sort();
+    if (!names.length) body.append(h("div", { class: "hint" }, "Пока пусто. Пресеты можно переключать одной кнопкой в программе: Настройки → OBS."));
+    for (const n of names) {
+      body.append(h("div", { class: "row", style: "grid-template-columns:1fr auto" },
+        h("label", { style: "color:var(--text);font-weight:600" }, n),
+        h("div", { style: "display:flex;gap:6px" },
+          h("button", { class: "btn sm", title: "Открыть в редакторе", onclick: () => { state = CS.normalize(myPresets[n]); build(); changed(); toast("Загружен «" + n + "» — сохрани, чтобы применить"); } }, "Открыть"),
+          h("button", { class: "btn sm pri", title: "Сразу применить в OBS", onclick: async () => {
+            try { await presetAction({ action: "apply", name: n }); state = CS.normalize(myPresets[n]); savedJson = JSON.stringify(state); build(); changed(); toast("«" + n + "» применён в OBS"); }
+            catch (e) { toast("Ошибка: " + e.message, true); } } }, "В OBS"),
+          h("button", { class: "btn sm", title: "Удалить", onclick: async () => {
+            try { await presetAction({ action: "delete", name: n }); build(); toast("Удалён «" + n + "»"); }
+            catch (e) { toast("Ошибка: " + e.message, true); } } }, "✕"))));
+    }
+  }
+  async function featureDemo() {
+    try {
+      const r = await fetch("/obs/feature", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ demo: true }) });
+      toast(r.ok ? "Пример показан в источнике /obs/featured (сначала сохрани стиль)" : "Ошибка " + r.status, !r.ok);
+    } catch (e) { toast("Нет связи с программой", true); }
+  }
+
+  function applyPreset(key) {
+    state = CS.fromPreset(key);
+    build(); changed(); toast("Применён стиль «" + CS.PRESETS[key].name + "» — не забудь сохранить");
+  }
+
+  // ---------- картинка ----------
+  function measure(url, cb) {
+    if (!url) return;
+    if (imgSizes[url]) return cb && cb(imgSizes[url]);
+    const im = new Image();
+    im.onload = () => { imgSizes[url] = [im.naturalWidth, im.naturalHeight]; cb && cb(imgSizes[url]); };
+    im.src = url;
+  }
+
+  function setImage(base, url, slice) {
+    state[base].image = url;
+    const p = get(base);
+    measure(url, (sz) => {
+      if (slice) p.slice = slice.slice();
+      else {
+        const s = Math.max(1, Math.round(Math.min(sz[0], sz[1]) / 3));
+        p.slice = [s, s, s, s];
+      }
+      fitPadding(base);
+      build(); changed();
+    });
+    changed(); build();
+  }
+  function fitPadding(base) {
+    const p = get(base);
+    const k = p.sliceScale || 1;
+    if (p.imgMode !== "slice") return;
+    p.padY = Math.round(Math.max(p.slice[0], p.slice[2]) * k * 0.7);
+    p.padX = Math.round(Math.max(p.slice[1], p.slice[3]) * k * 0.8);
+  }
+
+  async function upload(file) {
+    if (!file || !/^image\//.test(file.type)) throw new Error("Нужен файл-изображение (PNG, JPG, WEBP, GIF)");
+    if (file.size > 15 * 1024 * 1024) throw new Error("Файл больше 15 МБ");
+    const r = await fetch("/obs/upload?name=" + encodeURIComponent(file.name), {
+      method: "POST", headers: { "Content-Type": file.type }, body: file });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.url) throw new Error(j.error || ("Ошибка загрузки: " + r.status));
+    return j.url;
+  }
+
+  function imageControl(f) {
+    const base = f.base, url = get(f.k);
+    const fileIn = h("input", { type: "file", accept: "image/png,image/jpeg,image/webp,image/gif", hidden: true });
+    const go = async (file) => {
+      try { toast("Загружаю…"); setImage(base, await upload(file)); toast("Картинка загружена"); }
+      catch (e) { toast(e.message, true); }
+    };
+    fileIn.addEventListener("change", () => fileIn.files[0] && go(fileIn.files[0]));
+    const th = h("div", { class: "th" }, url ? h("img", { src: url }) : "нет");
+    const size = imgSizes[url];
+    const meta = h("div", { class: "meta" },
+      h("div", { style: "display:flex;gap:6px" },
+        h("button", { class: "btn sm pri", onclick: () => fileIn.click() }, url ? "Заменить" : "Загрузить"),
+        url ? h("button", { class: "btn sm", onclick: () => { get(base).image = ""; changed(); build(); } }, "Убрать") : null),
+      h("small", {}, url ? (url.startsWith("data:") ? "встроенный пример" : url.split("/").pop()) + (size ? ` · ${size[0]}×${size[1]}` : "")
+                         : "PNG/WEBP с прозрачностью — или перетащи файл сюда"));
+    if (url && !size) measure(url, () => build());
+    const drop = h("div", { class: "drop" }, th, meta, fileIn);
+    drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("over"); });
+    drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+    drop.addEventListener("drop", (e) => { e.preventDefault(); drop.classList.remove("over"); e.dataTransfer.files[0] && go(e.dataTransfer.files[0]); });
+    const samples = h("div", { class: "samples" }, h("span", { class: "hint" }, "Примеры:"),
+      SAMPLES.map((s) => h("button", { class: "btn sm", onclick: () => {
+        get(base).imgMode = "slice";
+        if (base === "plate") { state.text.color = s.text || "#ffffff"; state.text.shadow = s.text ? "none" : state.text.shadow; }
+        setImage(base, s.url, s.slice); } }, s.name)));
+    return h("div", { class: "img-box" }, drop, samples);
+  }
+
+  // 9-slice: картинка с перетаскиваемыми направляющими
+  function sliceControl(f) {
+    const base = f.base, p = get(base), url = p.image;
+    const sz = imgSizes[url];
+    const wrap = h("div", { class: "img-box" });
+    if (!sz) { measure(url, () => build()); return wrap; }
+    const [W, H] = sz;
+    const img = h("img", { src: url, draggable: "false" });
+    const box = h("div", { class: "slicer" }, img);
+    const lines = [
+      h("div", { class: "ln h", "data-i": 0 }), h("div", { class: "ln v", "data-i": 1 }),
+      h("div", { class: "ln h", "data-i": 2 }), h("div", { class: "ln v", "data-i": 3 }),
+    ];
+    box.append(...lines);
+    const nums = [];
+    const place = () => {
+      const s = p.slice;
+      lines[0].style.top = (s[0] / H * 100) + "%";
+      lines[2].style.top = (100 - s[2] / H * 100) + "%";
+      lines[3].style.left = (s[3] / W * 100) + "%";
+      lines[1].style.left = (100 - s[1] / W * 100) + "%";
+      nums.forEach((n, i) => { if (document.activeElement !== n) n.value = s[i]; });
+    };
+    const clampS = (i, v) => Math.max(0, Math.min(i % 2 ? W - 1 : H - 1, Math.round(v)));
+    lines.forEach((ln) => {
+      ln.addEventListener("pointerdown", (e) => {
+        e.preventDefault(); ln.setPointerCapture(e.pointerId);
+        const i = +ln.dataset.i;
+        const mv = (ev) => {
+          const r = img.getBoundingClientRect();
+          let v;
+          if (i === 0) v = (ev.clientY - r.top) / r.height * H;
+          if (i === 2) v = (r.bottom - ev.clientY) / r.height * H;
+          if (i === 3) v = (ev.clientX - r.left) / r.width * W;
+          if (i === 1) v = (r.right - ev.clientX) / r.width * W;
+          p.slice[i] = clampS(i, v);
+          if (link.checked) p.slice = [p.slice[i], p.slice[i], p.slice[i], p.slice[i]].map((x, j) => clampS(j, x));
+          place(); changed();
+        };
+        const up = () => { ln.removeEventListener("pointermove", mv); ln.removeEventListener("pointerup", up); };
+        ln.addEventListener("pointermove", mv); ln.addEventListener("pointerup", up);
+      });
+    });
+    const labels = ["Верх", "Право", "Низ", "Лево"];
+    const numRow = h("div", { class: "slice-nums" }, labels.map((l, i) => {
+      const n = h("input", { type: "number", min: 0, max: i % 2 ? W : H, value: p.slice[i] });
+      n.addEventListener("input", () => {
+        p.slice[i] = clampS(i, Number(n.value) || 0);
+        if (link.checked) p.slice = p.slice.map((_, j) => clampS(j, p.slice[i]));
+        place(); changed();
+      });
+      nums.push(n);
+      return h("label", {}, l, n);
+    }));
+    const link = h("input", { type: "checkbox" });
+    place();
+    wrap.append(
+      h("div", { class: "hint" }, "Перетащи розовые линии: углы за линиями не растягиваются, середина тянется под длину сообщения."),
+      box, numRow,
+      h("div", { style: "display:flex;gap:10px;align-items:center;justify-content:space-between" },
+        h("label", { class: "hint", style: "display:flex;gap:6px;align-items:center" }, h("span", { class: "tgl" }, link, h("span")), "все края одинаково"),
+        h("button", { class: "btn sm", onclick: () => { fitPadding(base); build(); changed(); } }, "Отступы под края")));
+    return wrap;
+  }
+
+  // ---------- предпросмотр ----------
+  const pv = $("#pv");
+  let pvReady = false;
+  const post = (m) => { if (pvReady) pv.contentWindow.postMessage(m, location.origin); };
+  window.addEventListener("message", (e) => {
+    if (e.origin !== location.origin || !e.data) return;
+    if (e.data.type === "preview-ready") {
+      pvReady = true;
+      post({ type: "style", style: state });
+      post({ type: "refill", n: 6 });
+      post({ type: "demo", on: $("#flow").checked, ms: 1900 });
+    }
+  });
+  let raf = 0;
+  function changed() {
+    cancelAnimationFrame(raf);
+    raf = requestAnimationFrame(() => post({ type: "style", style: state }));
+    updateStatus();
+  }
+
+  function setWidth(w) {
+    w = Math.max(200, Math.min(2000, Number(w) || 420));
+    $("#frame").style.width = w + "px"; $("#pw").value = w; $("#pwn").value = w;
+    $("#dim").textContent = w + " px";
+    try { localStorage.setItem("chatEditor.pw", w); } catch (e) {}
+  }
+  $("#pw").addEventListener("input", (e) => setWidth(e.target.value));
+  $("#pwn").addEventListener("change", (e) => setWidth(e.target.value));
+  $("#bgSeg").addEventListener("click", (e) => {
+    const b = e.target.closest("button"); if (!b) return;
+    $("#bgSeg").querySelectorAll("button").forEach((x) => x.classList.toggle("on", x === b));
+    $("#stage").className = "stage bg-" + b.dataset.v;
+    try { localStorage.setItem("chatEditor.bg", b.dataset.v); } catch (e) {}
+  });
+  $("#flow").addEventListener("change", (e) => post({ type: "demo", on: e.target.checked, ms: 1900 }));
+  $("#refill").addEventListener("click", () => post({ type: "refill", n: 6 }));
+  $("#testObs").addEventListener("click", async () => {
+    try {
+      const r = await fetch("/obs/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+      toast(r.ok ? "Тестовое сообщение отправлено в OBS" : "Не удалось: " + r.status, !r.ok);
+    } catch (e) { toast("Нет связи с программой", true); }
+  });
+
+  // ---------- сохранение ----------
+  const status = $("#status");
+  function updateStatus() {
+    const dirty = JSON.stringify(state) !== savedJson;
+    status.className = dirty ? "dirty" : "ok";
+    status.textContent = dirty ? "● есть несохранённые изменения" : "✓ сохранено, OBS обновлён";
+  }
+  async function save() {
+    try {
+      const body = JSON.stringify(state);
+      const r = await fetch("/obs/style", { method: "POST", headers: { "Content-Type": "application/json" }, body });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      savedJson = body; updateStatus(); toast("Сохранено — Browser Source обновится сам");
+    } catch (e) { status.className = "err"; status.textContent = "ошибка сохранения: " + e.message; }
+  }
+  $("#save").addEventListener("click", save);
+  document.addEventListener("keydown", (e) => { if ((e.ctrlKey || e.metaKey) && e.code === "KeyS") { e.preventDefault(); save(); } });
+  $("#revert").addEventListener("click", () => { state = CS.normalize(savedJson ? JSON.parse(savedJson) : {}); build(); changed(); });
+  $("#export").addEventListener("click", () => {
+    const a = h("a", { href: URL.createObjectURL(new Blob([JSON.stringify(state, null, 2)], { type: "application/json" })), download: "chat-style.json" });
+    document.body.append(a); a.click(); a.remove();
+  });
+  $("#import").addEventListener("click", () => $("#importFile").click());
+  $("#importFile").addEventListener("change", async (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    try { state = CS.normalize(JSON.parse(await f.text())); build(); changed(); toast("Стиль импортирован — сохрани, чтобы применить"); }
+    catch (err) { toast("Не похоже на файл стиля", true); }
+    e.target.value = "";
+  });
+  window.addEventListener("beforeunload", (e) => { if (JSON.stringify(state) !== savedJson) { e.preventDefault(); e.returnValue = ""; } });
+
+  // ---------- URL для OBS ----------
+  const obsUrl = location.origin + "/obs/browser";
+  $("#obsUrl").value = obsUrl;
+  $("#copyUrl").addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(obsUrl); } catch (e) { $("#obsUrl").select(); document.execCommand("copy"); }
+    toast("Ссылка скопирована — вставь её в OBS → Browser Source");
+  });
+
+  let toastT = 0;
+  function toast(msg, err) {
+    const t = $("#toast");
+    t.textContent = msg; t.style.borderLeftColor = err ? "var(--danger)" : "var(--accent)";
+    t.classList.add("on"); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove("on"), 2600);
+  }
+
+  // ---------- старт ----------
+  (async function init() {
+    try { setWidth(localStorage.getItem("chatEditor.pw") || 420); } catch (e) { setWidth(420); }
+    try {
+      const bg = localStorage.getItem("chatEditor.bg");
+      if (bg) $(`#bgSeg button[data-v="${bg}"]`)?.click();
+    } catch (e) {}
+    let raw = {};
+    try { const r = await fetch("/obs/style.json", { cache: "no-store" }); if (r.ok) raw = await r.json(); } catch (e) {}
+    state = CS.normalize(raw);
+    savedJson = JSON.stringify(state);
+    await loadMyPresets();
+    for (const b of ["plate", "nickPlate"]) if (state[b].image) measure(state[b].image);
+    build(); changed();
+  })();
+})();
+</script>
+</body>
+</html>

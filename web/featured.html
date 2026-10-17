@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Сообщение на экран (OBS)</title>
+  <style>html,body{margin:0;height:100%;background:transparent;overflow:hidden}</style>
+</head>
+<body>
+  <div id="chat" aria-live="polite"></div>
+  <script src="/obs/overlay.js"></script>
+  <script>
+  (function () {
+    const qs = new URLSearchParams(location.search);
+    const chat = document.getElementById("chat");
+    const R = ChatStyle.Renderer(chat);
+    // свой <style> после стилей рендерера — переопределяет позицию и масштаб
+    const fs = document.createElement("style");
+    document.head.appendChild(fs);
+    let base = {}, current = null, hideT = 0;
+
+    function cfg() { return ChatStyle.normalize(base).featured || {}; }
+
+    function applyStyle() {
+      const f = cfg();
+      const st = ChatStyle.deepMerge(ChatStyle.clone(base), {
+        layout: { max: 1, lifetime: 0, anim: "pop", width: "fit", align: "bottom" },
+      });
+      R.setStyle(st);
+      const just = { top: "flex-start", center: "center", bottom: "flex-end", "bottom-left": "flex-end" }[f.position] || "flex-end";
+      const items = f.position === "bottom-left" ? "flex-start" : "center";
+      const sc = Math.max(0.5, Math.min(4, Number(f.scale) || 1.6));
+      fs.textContent =
+        `#chat{justify-content:${just} !important;align-items:${items} !important;zoom:${sc}}` +
+        `.msg{max-width:min(100%, 900px)}` +
+        `.msg.out{animation:out-fade var(--anim) ease both}`;
+    }
+
+    function show(p) {
+      clearTimeout(hideT);
+      R.clear();
+      current = p;
+      if (!p) return;
+      R.add(Object.assign({}, p, { kind: "msg" }));
+      const dur = Number(cfg().duration) || 0;
+      if (dur > 0) hideT = setTimeout(hide, dur * 1000);
+    }
+    function hide() {
+      clearTimeout(hideT);
+      const m = chat.firstElementChild;
+      current = null;
+      if (!m) return;
+      m.classList.add("out");
+      setTimeout(() => { if (!current) R.clear(); }, 450);
+    }
+
+    async function loadStyle() {
+      try {
+        const r = await fetch("/obs/style.json", { cache: "no-store" });
+        if (r.ok) { base = await r.json(); applyStyle(); }
+      } catch (e) {}
+    }
+    async function loadFeatured() {
+      try {
+        const r = await fetch("/obs/featured.json", { cache: "no-store" });
+        if (r.ok) { const d = await r.json(); if (d && d.msg) show(d.msg); }
+      } catch (e) {}
+    }
+
+    function handle(p) {
+      if (!p) return;
+      if (p.kind === "feature") show(p.msg);
+      else if (p.kind === "unfeature") hide();
+      else if (p.kind === "style") loadStyle();
+      else if ((p.kind === "delete" && current && p.mid === current.mid) || p.kind === "clear") hide();
+    }
+    function connect() {
+      const es = new EventSource("/obs/events");
+      es.onmessage = (e) => { try { handle(JSON.parse(e.data)); } catch (err) {} };
+      es.onerror = () => { try { es.close(); } catch (err) {} setTimeout(connect, 1500); };
+    }
+
+    loadStyle().then(() => {
+      if (qs.has("demo")) show(ChatStyle.demoMessage(1));
+      return loadFeatured();
+    }).then(connect);
+  })();
+  </script>
+</body>
+</html>

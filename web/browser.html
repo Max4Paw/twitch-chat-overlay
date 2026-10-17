@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Chat Overlay (OBS)</title>
+  <style>html,body{margin:0;height:100%;background:transparent;overflow:hidden}</style>
+</head>
+<body>
+  <div id="chat" aria-live="polite"></div>
+  <script src="/obs/overlay.js"></script>
+  <script>
+  (function () {
+    const qs = new URLSearchParams(location.search);
+    const PREVIEW = qs.has("preview");
+    const DEMO = PREVIEW || qs.has("demo");
+    const R = ChatStyle.Renderer(document.getElementById("chat"));
+
+    // ---------- демо ----------
+    let demoI = 0, demoTimer = null;
+    function demoOn(on, ms) {
+      clearInterval(demoTimer); demoTimer = null;
+      if (on) demoTimer = setInterval(() => R.add(ChatStyle.demoMessage(demoI++)), ms || 1800);
+    }
+    function demoFill(n) { for (let i = 0; i < n; i++) R.add(ChatStyle.demoMessage(demoI++)); }
+
+    if (PREVIEW) {
+      // Режим предпросмотра внутри редактора: стиль приходит через postMessage
+      window.addEventListener("message", (e) => {
+        if (e.origin !== location.origin) return;
+        const d = e.data || {};
+        if (d.type === "style") R.setStyle(d.style);
+        else if (d.type === "demo") demoOn(!!d.on, d.ms);
+        else if (d.type === "refill") { R.clear(); demoFill(d.n || 6); }
+        else if (d.type === "one") R.add(ChatStyle.demoMessage(demoI++));
+      });
+      parent.postMessage({ type: "preview-ready" }, location.origin);
+      return;
+    }
+
+    // ---------- живой режим ----------
+    let styleJson = "";
+    async function loadStyle() {
+      try {
+        const r = await fetch("/obs/style.json", { cache: "no-store" });
+        if (!r.ok) return;
+        const t = await r.text();
+        if (t !== styleJson) { styleJson = t; R.setStyle(JSON.parse(t)); }
+      } catch (e) {}
+    }
+
+    let lastId = 0;
+    function handle(p) {
+      if (!p) return;
+      if (p.id) lastId = Math.max(lastId, Number(p.id) || 0);
+      if (p.kind === "msg") R.add(p);
+      else if (p.kind === "style") loadStyle();
+      else if (p.kind === "clear") R.clear();
+      else if (p.kind === "delete") R.remove(p.mid);
+      else if (p.kind === "clear_user") R.removeUser(p.login);
+    }
+    async function loadHistory() {
+      try {
+        const r = await fetch("/obs/history.json", { cache: "no-store" });
+        if (r.ok) (await r.json() || []).slice(-60).forEach(handle);
+      } catch (e) {}
+    }
+    let pollN = 0;
+    async function poll() {
+      try {
+        const r = await fetch("/obs/history.json?since=" + lastId, { cache: "no-store" });
+        if (r.ok) (await r.json() || []).forEach(handle);
+      } catch (e) {}
+      if (++pollN % 3 === 0) loadStyle();
+      setTimeout(poll, 1000);
+    }
+    function connect() {
+      if (typeof EventSource === "undefined") return poll();
+      const es = new EventSource("/obs/events");
+      let opened = false;
+      es.onopen = () => { opened = true; loadStyle(); };
+      es.onmessage = (e) => { try { handle(JSON.parse(e.data)); } catch (err) {} };
+      es.onerror = () => {
+        try { es.close(); } catch (err) {}
+        if (!opened) return poll();
+        setTimeout(connect, 1500);
+      };
+    }
+    loadStyle().then(() => {
+      if (DEMO) { demoFill(5); demoOn(true, 2200); }
+      return loadHistory();
+    }).then(connect);
+  })();
+  </script>
+</body>
+</html>

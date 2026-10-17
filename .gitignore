@@ -25,6 +25,8 @@ dist/
 # --- пользовательские файлы программы (генерируются при запуске) ---
 overlay_config.json
 chat_history.txt
+obs_style.json
+obs_assets/
 
 # --- IDE ---
 .idea/
