@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Последние события (OBS)</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
+    #box { display: flex; gap: 10px; padding: 12px; box-sizing: border-box; font-family: var(--font), "Segoe UI", system-ui, sans-serif; }
+    #box.column { flex-direction: column; align-items: flex-start; }
+    #box.row { flex-direction: row; flex-wrap: wrap; }
+    .card { position: relative; min-width: 200px; padding: 9px 14px 10px 18px; border-radius: 12px; color: #fff;
+            background: rgba(14, 15, 26, .78); border: 1px solid rgba(255,255,255,.08); box-shadow: 0 6px 18px rgba(0,0,0,.3);
+            overflow: hidden; animation: in .5s cubic-bezier(.2,.8,.2,1) both; }
+    .card::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 5px; background: var(--c); }
+    .lbl { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--c); }
+    .name { font-size: 19px; font-weight: 800; margin-top: 2px; text-shadow: 0 1px 2px rgba(0,0,0,.6); white-space: nowrap; }
+    .name small { font-size: 13px; opacity: .7; font-weight: 600; margin-left: 6px; }
+    .empty { opacity: .45; }
+    @keyframes in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  </style>
+</head>
+<body>
+  <div id="box" class="column"></div>
+  <script src="/obs/overlay.js"></script>
+  <script>
+  (function () {
+    const box = document.getElementById("box");
+    let style = ChatStyle.normalize({}), data = { last: {}, top_cheer: null };
+    const LABELS = { sub: "Последняя подписка", gift: "Последний подарок", raid: "Последний рейд",
+                     cheer: "Последние битсы", top: "Топ битсов",
+                     donation: "Последний донат", topdon: "Топ донат" };
+    function card(key, name, extra, color) {
+      const c = document.createElement("div"); c.className = "card";
+      c.style.setProperty("--c", color);
+      const l = document.createElement("div"); l.className = "lbl"; l.textContent = LABELS[key];
+      const n = document.createElement("div"); n.className = "name" + (name ? "" : " empty");
+      n.textContent = name || "—";
+      if (name && extra) { const s = document.createElement("small"); s.textContent = extra; n.appendChild(s); }
+      c.append(l, n); return c;
+    }
+    function render() {
+      const R = style.recent || {}, col = (style.events && style.events.colors) || {};
+      box.className = R.layout === "row" ? "row" : "column";
+      box.textContent = "";
+      for (const key of (R.items || [])) {
+        if (key === "topdon") {
+          const t = data.top_donation;
+          box.appendChild(card("topdon", t && t.name, t ? t.amount + " " + (t.currency || "₽") : "", col.donation || "#f57d07"));
+          continue;
+        }
+        if (key === "top") {
+          const t = data.top_cheer;
+          box.appendChild(card("top", t && t.name, t ? t.amount + " битс" : "", col.cheer || "#f5c518"));
+          continue;
+        }
+        const it = (data.last || {})[key];
+        let extra = "";
+        if (it && key === "raid") extra = it.amount + " зрит.";
+        if (it && key === "cheer") extra = it.amount + " битс";
+        if (it && key === "gift") extra = "×" + (it.amount || 1);
+        if (it && key === "donation") extra = it.amount + " " + (it.currency || "₽");
+        box.appendChild(card(key, it && it.name, extra, col[key] || "#a970ff"));
+      }
+    }
+    async function loadStyle() {
+      try {
+        const r = await fetch("/obs/style.json", { cache: "no-store" });
+        style = ChatStyle.normalize(r.ok ? await r.json() : {});
+        ChatStyle.ensureFont(style.text.font);
+        document.documentElement.style.setProperty("--font", `"${style.text.font}"`);
+      } catch (e) {}
+      render();
+    }
+    async function loadData() {
+      try { const r = await fetch("/obs/recent.json", { cache: "no-store" }); if (r.ok) data = await r.json(); } catch (e) {}
+      render();
+    }
+    function connect() {
+      const es = new EventSource("/obs/events");
+      es.onmessage = (e) => { try { const p = JSON.parse(e.data); if (p.kind === "recent") loadData(); if (p.kind === "style") loadStyle(); } catch (err) {} };
+      es.onerror = () => { try { es.close(); } catch (err) {} setTimeout(connect, 1500); };
+    }
+    loadStyle().then(loadData).then(connect);
+  })();
+  </script>
+</body>
+</html>

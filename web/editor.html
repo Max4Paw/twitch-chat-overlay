@@ -292,6 +292,7 @@
       { k: "layout.showBadges", t: "toggle", l: "Значки ролей" },
       { k: "layout.showPlatform", t: "toggle", l: "Значок платформы" },
       { k: "layout.showTime", t: "toggle", l: "Время" },
+      { k: "translate.enabled", t: "toggle", l: "Перевод под сообщением", hint: "включается в программе: Настройки → Ещё" },
     ] },
     { id: "text", icon: "Aa", title: "Текст", fields: [
       { k: "text.font", t: "select", l: "Шрифт", o: fontOpts, rebuild: true },
@@ -330,6 +331,11 @@
           { k: `roles.${r}.nick`, t: "toggle", l: "Ник цветом роли", show: on },
         );
       }
+      out.push(
+        { sub: "Новые зрители (первое сообщение)" },
+        { k: "first.enabled", t: "toggle", l: "Выделять", hint: "значок «👋 новичок» и зелёная рамка" },
+        { k: "first.color", t: "color", l: "Цвет", show: () => T("first.enabled") },
+      );
       return out;
     } },
     { id: "featured", icon: "📺", title: "Сообщение на экран", fields: [
@@ -339,6 +345,8 @@
       { k: "featured.position", t: "seg", l: "Где", o: [["bottom", "Снизу"], ["center", "Центр"], ["top", "Сверху"], ["bottom-left", "Слева"]] },
       { t: "button", l: "Показать пример в OBS", fn: () => featureDemo() },
     ] },
+    { id: "goal", icon: "🎯", title: "Цель стрима (отдельный источник)", custom: buildGoal },
+    { id: "recent", icon: "🕑", title: "Последние события (отдельный источник)", custom: buildRecent },
     { id: "events", icon: "🎁", title: "События: сабки, гифты, рейды", fields: [
       { k: "events.enabled", t: "toggle", l: "Показывать", hint: "подписки, подарки, рейды, битсы, объявления" },
       { k: "events.frame", t: "toggle", l: "Рамка и свечение", show: () => T("events.enabled") },
@@ -349,6 +357,7 @@
       { k: "events.colors.raid", t: "color", l: "Рейд", show: () => T("events.enabled") },
       { k: "events.colors.cheer", t: "color", l: "Битсы", show: () => T("events.enabled") },
       { k: "events.colors.announcement", t: "color", l: "Объявление", show: () => T("events.enabled") },
+      { k: "events.colors.donation", t: "color", l: "Донат (DA)", show: () => T("events.enabled") },
     ] },
     { id: "hl", icon: "★", title: "Подсветка упоминаний", fields: [
       { k: "hl.enabled", t: "toggle", l: "Подсвечивать", hint: "слова задаются в настройках программы → Фильтры" },
@@ -499,6 +508,68 @@
             catch (e) { toast("Ошибка: " + e.message, true); } } }, "✕"))));
     }
   }
+  // ---------- цель стрима ----------
+  let goal = null;
+  async function loadGoal() {
+    try { const r = await fetch("/obs/goal.json", { cache: "no-store" }); if (r.ok) goal = await r.json(); } catch (e) {}
+  }
+  async function postJSON(url, body) {
+    const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return r.json();
+  }
+  function buildGoal(body) {
+    if (!goal) { body.append(h("div", { class: "hint" }, "загрузка…")); loadGoal().then(build); return; }
+    const g = Object.assign({}, goal);
+    body.append(h("div", { class: "hint" }, "Источник: " + location.origin + "/obs/goal — растёт сам от подписок, битсов или донатов DonationAlerts."));
+    const title = h("input", { type: "text", value: g.title, maxlength: 80 });
+    title.addEventListener("input", () => { g.title = title.value; });
+    body.append(h("div", { class: "row" }, h("label", {}, "Название"), title));
+    const seg = h("div", { class: "seg" }, [["subs", "Подписки"], ["bits", "Битсы"], ["donations", "Донаты ₽"]].map(([v, l]) =>
+      h("button", { class: g.type === v ? "on" : "", onclick: (e) => { g.type = v; seg.querySelectorAll("button").forEach((b) => b.classList.toggle("on", b === e.target)); } }, l)));
+    body.append(h("div", { class: "row" }, h("label", {}, "Считать"), seg));
+    const num = (k, l) => {
+      const n = h("input", { type: "number", min: 0, value: g[k] });
+      n.addEventListener("input", () => { g[k] = Number(n.value) || 0; });
+      body.append(h("div", { class: "row" }, h("label", {}, l), n));
+    };
+    num("target", "Цель"); num("current", "Сейчас");
+    const pick = h("input", { type: "color", value: g.color });
+    pick.addEventListener("input", () => { g.color = pick.value; });
+    body.append(h("div", { class: "row" }, h("label", {}, "Цвет полосы"), h("div", { class: "clr" }, pick)));
+    body.append(h("div", { style: "display:flex;gap:6px" },
+      h("button", { class: "btn sm pri", onclick: async () => {
+        try { goal = await postJSON("/obs/goal", g); toast("Цель обновлена в OBS"); } catch (e) { toast("Ошибка: " + e.message, true); } } }, "Сохранить цель"),
+      h("button", { class: "btn sm", onclick: async () => {
+        try { goal = await postJSON("/obs/goal", { current: 0 }); build(); toast("Прогресс сброшен"); } catch (e) { toast("Ошибка: " + e.message, true); } } }, "Сбросить прогресс")));
+  }
+
+  // ---------- лента последних событий ----------
+  function buildRecent(body) {
+    body.append(h("div", { class: "hint" }, "Источник: " + location.origin + "/obs/recent — последняя подписка, подарок, рейд, топ битсов."));
+    const ITEMS = [["sub", "Последняя подписка"], ["gift", "Последний подарок"], ["raid", "Последний рейд"],
+                   ["cheer", "Последние битсы"], ["top", "Топ битсов"],
+                   ["donation", "Последний донат"], ["topdon", "Топ донат"]];
+    for (const [k, l] of ITEMS) {
+      const cb = h("input", { type: "checkbox", checked: (state.recent.items || []).includes(k) });
+      cb.addEventListener("change", () => {
+        const order = ITEMS.map(([x]) => x);
+        const set = new Set(state.recent.items || []);
+        cb.checked ? set.add(k) : set.delete(k);
+        state.recent.items = order.filter((x) => set.has(x));
+        changed();
+      });
+      body.append(h("div", { class: "row" }, h("label", {}, l), h("label", { class: "tgl" }, cb, h("span"))));
+    }
+    body.append(control({ k: "recent.layout", t: "seg", l: "Расположение", o: [["column", "Столбиком"], ["row", "В ряд"]] }));
+    body.append(h("div", { style: "display:flex;gap:6px" },
+      h("button", { class: "btn sm", onclick: async () => {
+        try { await postJSON("/obs/recent", { demo: true }); toast("Добавлены тестовые события (и +1 к цели)"); } catch (e) { toast("Ошибка: " + e.message, true); } } }, "Тестовые события"),
+      h("button", { class: "btn sm", onclick: async () => {
+        try { await postJSON("/obs/recent", { reset: true }); toast("Лента очищена"); } catch (e) { toast("Ошибка: " + e.message, true); } } }, "Очистить ленту")));
+    body.append(h("div", { class: "hint" }, "Цвета карточек — из раздела «События». Не забудь «Сохранить и применить»."));
+  }
+
   async function featureDemo() {
     try {
       const r = await fetch("/obs/feature", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ demo: true }) });

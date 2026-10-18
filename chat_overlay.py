@@ -35,9 +35,27 @@ import socketserver
 import urllib.parse
 import hashlib
 import webbrowser
-from collections import deque
+from html import escape as html_escape
+from collections import deque, Counter
 
 IS_WIN = sys.platform.startswith("win")
+
+APP_VERSION = "0.1.5"
+APP_CHANNEL = "Stable"
+GITHUB_REPO = "Max4Paw/twitch-chat-overlay"
+
+# Известные чат-боты — скрываются галочкой «Скрывать ботов»
+KNOWN_BOTS = {
+    "nightbot", "streamelements", "moobot", "wizebot", "fossabot", "streamlabs",
+    "soundalerts", "sery_bot", "botrixoficial", "kofistreambot", "commanderroot",
+    "pokemoncommunitygame", "streamstickers", "own3d", "blerp", "lumiastream",
+    "deepbot", "phantombot", "coebot", "vivbot", "ankhbot", "dixperbro",
+    "tangiabot", "frostytoolsdotcom", "botisimo", "creatisbot", "wzbot",
+    "stay_hydrated_bot", "streamholics", "anotherttvviewer", "pretzelrocks",
+    "songlistbot", "buttsbot", "jeffbot", "mikuia", "ohbot", "revlobot",
+    "scottybot", "supibot", "titlechange_bot", "markov_chain_bot", "ttdbot",
+    "donationalerts_", "da_bot", "streamdps", "memealerts", "memealertsbot",
+}
 if IS_WIN:
     import ctypes
 
@@ -731,6 +749,13 @@ class WebHub:
         else:
             self.publish({"kind": "unfeature"})
 
+    def translate(self, mid: str, text: str):
+        with self._lock:
+            for p in self._history:
+                if p.get("mid") == mid and p.get("kind") == "msg":
+                    p["tr"] = text
+        self.publish({"kind": "translate", "mid": mid, "text": text})
+
     def moderate(self, info: dict):
         """Удаление модерацией: чистим историю и рассылаем событие клиентам."""
         t = info.get("type")
@@ -943,6 +968,11 @@ _OBS_DOCK_HTML = """<!doctype html>
       const c = document.createElement("div"); c.className = "c"; c.textContent = ":";
       const m = document.createElement("div"); m.className = "m"; renderMsg(m, msg, p.emotes);
       line.append(t,u,c,m);
+      if (p.tr) {
+        const tr = document.createElement("div"); tr.className = "tr";
+        tr.style.cssText = "flex-basis:100%;color:#8b91a7;font-style:italic;font-size:12px;padding-left:56px";
+        tr.textContent = "↳ " + p.tr; line.style.flexWrap = "wrap"; line.appendChild(tr);
+      }
       line.title = "Показать на экране";
       line.onclick = () => feature(p.mid);
       chat.appendChild(line);
@@ -986,6 +1016,14 @@ _OBS_DOCK_HTML = """<!doctype html>
         chat.querySelectorAll(".line").forEach((n) => { if (n.dataset.login === p.login) n.remove(); });
       } else if (p.kind === "clear") {
         chat.textContent = "";
+      } else if (p.kind === "translate") {
+        chat.querySelectorAll(".line").forEach((n) => {
+          if (n.dataset.mid === p.mid && !n.querySelector(".tr")) {
+            const t = document.createElement("div"); t.className = "tr";
+            t.style.cssText = "flex-basis:100%;color:#8b91a7;font-style:italic;font-size:12px;padding-left:56px";
+            t.textContent = "↳ " + p.text; n.style.flexWrap = "wrap"; n.appendChild(t);
+          }
+        });
       } else if (p.kind === "feature") {
         markFeatured(p.msg && p.msg.mid);
       } else if (p.kind === "unfeature") {
@@ -1130,6 +1168,28 @@ class _ObsHandler(http.server.BaseHTTPRequestHandler):
             hub.feature(p)
             return self._json(200, {"ok": True})
 
+        if path in ("/obs/goal", "/obs/recent"):
+            raw = self._read_body(64 * 1024)
+            try:
+                body = json.loads(raw.decode("utf-8")) if raw else {}
+            except Exception:
+                return self._json(400, {"error": "bad json"})
+            st: StreamState = self.server.state  # type: ignore[attr-defined]
+            if path == "/obs/goal":
+                st.set_goal(body if isinstance(body, dict) else {})
+                hub.broadcast({"kind": "goal"})
+                return self._json(200, st.goal)
+            if body.get("reset"):
+                st.reset_recent()
+            elif body.get("demo"):
+                for ev, who in (({"type": "sub", "text": "DemoUser оформил подписку", "amount": 1}, "DemoUser"),
+                                ({"type": "raid", "text": "Рейд! RaidFriend и 25 зрителей", "amount": 25}, "RaidFriend"),
+                                ({"type": "cheer", "text": "BitsFan отправил 500 битс", "amount": 500}, "BitsFan")):
+                    st.record(ev, who)
+                hub.broadcast({"kind": "goal"})
+            hub.broadcast({"kind": "recent"})
+            return self._json(200, st.recent)
+
         if path == "/obs/presets":
             raw = self._read_body(_MAX_STYLE * 4)
             try:
@@ -1205,6 +1265,35 @@ class _ObsHandler(http.server.BaseHTTPRequestHandler):
 
         if path == "/obs/featured.json":
             return self._json(200, {"msg": hub.featured})
+
+        if path == "/da/callback":
+            params = {k: v[0] for k, v in urllib.parse.parse_qs(
+                urllib.parse.urlparse(self.path).query).items()}
+            da = _DA_INSTANCE
+            redirect = f"http://127.0.0.1:{self.server.server_address[1]}/da/callback"
+            if da is None:
+                ok, text = False, "Программа не готова — попробуйте ещё раз"
+            else:
+                ok, text = da.handle_callback(params, redirect)
+            color = "#5dd39e" if ok else "#ff5e7e"
+            html = ("<!doctype html><meta charset=utf-8><title>DonationAlerts</title>"
+                    "<body style='background:#0e0f1a;color:#e6e8ef;font:16px Segoe UI,sans-serif;"
+                    "display:grid;place-items:center;height:100vh;margin:0'><div style='text-align:center'>"
+                    f"<div style='font-size:42px;color:{color}'>{'✓' if ok else '✗'}</div>"
+                    f"<h2>{html_escape(text)}</h2><p style='color:#8b91a7'>Это окно можно закрыть.</p></div>")
+            return self._send(200, "text/html; charset=utf-8", html.encode("utf-8"))
+
+        if path in ("/obs/goal", "/obs/goal.html"):
+            return self._serve_web("goal.html", "text/html; charset=utf-8")
+
+        if path in ("/obs/recent", "/obs/recent.html"):
+            return self._serve_web("recent.html", "text/html; charset=utf-8")
+
+        if path == "/obs/goal.json":
+            return self._json(200, self.server.state.goal)  # type: ignore[attr-defined]
+
+        if path == "/obs/recent.json":
+            return self._json(200, self.server.state.recent)  # type: ignore[attr-defined]
 
         if path == "/obs/presets.json":
             return self._json(200, obs_presets_load(self._data_dir()))
@@ -1290,6 +1379,93 @@ class _ThreadingHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
     daemon_threads = True
 
 
+# ============================================================
+#     Цель стрима и лента последних событий (для OBS)
+# ============================================================
+class StreamState:
+    """Хранит цель стрима (obs_goal.json) и последние события
+    (obs_recent.json) — переживают перезапуск программы."""
+
+    GOAL_DEFAULT = {"title": "Цель стрима", "type": "subs", "target": 10,
+                    "current": 0, "color": "#a970ff"}
+
+    def __init__(self, data_dir: str):
+        self.dir = data_dir
+        self._lock = threading.Lock()
+        self.goal = dict(self.GOAL_DEFAULT)
+        self.goal.update(self._load("obs_goal.json"))
+        self.recent = {"last": {}, "top_cheer": None, "list": []}
+        self.recent.update(self._load("obs_recent.json"))
+
+    def _load(self, name: str) -> dict:
+        try:
+            with open(os.path.join(self.dir, name), encoding="utf-8") as f:
+                d = json.load(f)
+            return d if isinstance(d, dict) else {}
+        except Exception:
+            return {}
+
+    def _save(self):
+        try:
+            _json_write(os.path.join(self.dir, "obs_goal.json"), self.goal)
+            _json_write(os.path.join(self.dir, "obs_recent.json"), self.recent)
+        except Exception:
+            pass
+
+    def set_goal(self, data: dict):
+        with self._lock:
+            g = self.goal
+            if "title" in data:
+                g["title"] = str(data["title"])[:80]
+            if data.get("type") in ("subs", "bits", "donations"):
+                g["type"] = data["type"]
+            for k in ("target", "current"):
+                if k in data:
+                    g[k] = max(0, _safe_int(data[k], g[k]))
+            g["target"] = max(1, g["target"])
+            if isinstance(data.get("color"), str) and re.match(r"^#[0-9a-fA-F]{6}$", data["color"]):
+                g["color"] = data["color"]
+            self._save()
+
+    def reset_recent(self):
+        with self._lock:
+            self.recent = {"last": {}, "top_cheer": None, "top_donation": None, "list": []}
+            self._save()
+
+    def record(self, ev: dict, user: str) -> set:
+        """Учесть событие. Возвращает {'goal','recent'} — что изменилось."""
+        et = ev.get("type")
+        amount = _safe_int(ev.get("amount", 0), 0)
+        changed = set()
+        with self._lock:
+            g = self.goal
+            if (g["type"] == "subs" and et in ("sub", "gift")) or \
+               (g["type"] == "bits" and et == "cheer") or \
+               (g["type"] == "donations" and et == "donation"):
+                g["current"] += max(1, amount) if et in ("sub", "gift") else amount
+                changed.add("goal")
+            if et in ("sub", "gift", "raid", "cheer", "donation"):
+                item = {"type": et, "name": user, "text": ev.get("text", ""),
+                        "amount": amount,
+                        "ts": datetime.datetime.now().strftime("%H:%M")}
+                self.recent["last"][et] = item
+                self.recent["list"] = ([item] + self.recent.get("list", []))[:10]
+                if et == "cheer":
+                    top = self.recent.get("top_cheer")
+                    if not top or amount > top.get("amount", 0):
+                        self.recent["top_cheer"] = {"name": user, "amount": amount}
+                if et == "donation":
+                    top = self.recent.get("top_donation")
+                    if not top or amount > top.get("amount", 0):
+                        self.recent["top_donation"] = {"name": user, "amount": amount,
+                                                       "currency": ev.get("currency", "")}
+                    item["currency"] = ev.get("currency", "")
+                changed.add("recent")
+            if changed:
+                self._save()
+        return changed
+
+
 class ObsWebServer:
     def __init__(self, host: str = "127.0.0.1", port: int = 17655,
                  data_dir: str = USER_DIR):
@@ -1297,6 +1473,7 @@ class ObsWebServer:
         self.port = int(port)
         self.data_dir = data_dir
         self.hub = WebHub()
+        self.state = StreamState(data_dir)
         self._httpd = None
         self._thread = None
 
@@ -1306,9 +1483,14 @@ class ObsWebServer:
         httpd = _ThreadingHTTPServer((self.host, self.port), _ObsHandler)
         httpd.hub = self.hub  # type: ignore[attr-defined]
         httpd.data_dir = self.data_dir  # type: ignore[attr-defined]
+        httpd.state = self.state  # type: ignore[attr-defined]
         self._httpd = httpd
         self._thread = threading.Thread(target=httpd.serve_forever, daemon=True)
         self._thread.start()
+
+    def record_event(self, ev: dict, user: str):
+        for kind in self.state.record(ev, user):
+            self.hub.broadcast({"kind": kind})
 
     def stop(self):
         try:
@@ -1325,6 +1507,8 @@ class ObsWebServer:
             "browser": f"{base}/obs/browser",
             "editor": f"{base}/obs/editor",
             "featured": f"{base}/obs/featured",
+            "goal": f"{base}/obs/goal",
+            "recent": f"{base}/obs/recent",
         }
 
 
@@ -1467,6 +1651,7 @@ class TwitchIRC(threading.Thread):
                        for b in tags.get("badges", "").split(",") if b],
             "id": tags.get("id", ""),
             "login": (tags.get("login") or login or "").lower(),
+            "first": tags.get("first-msg") == "1",
         }
 
     @staticmethod
@@ -1509,7 +1694,7 @@ class TwitchIRC(threading.Thread):
                 extra = self._user_extra(tags, login)
                 bits = tags.get("bits", "")
                 if bits:
-                    extra["event"] = {"type": "cheer",
+                    extra["event"] = {"type": "cheer", "amount": _safe_int(bits, 0),
                                       "text": f"{user} отправил {bits} битс"}
                 if user and message is not None:
                     self.queue.put(("msg", (user, message, emotes, extra)))
@@ -1529,7 +1714,15 @@ class TwitchIRC(threading.Thread):
                 _, _, message = rest.partition(" :")
                 etype, etext = self._event_text(mid, tags, user)
                 extra = self._user_extra(tags, login)
-                extra["event"] = {"type": etype, "text": etext}
+                if etype == "sub":
+                    amount = 1
+                elif etype == "gift":
+                    amount = _safe_int(tags.get("msg-param-mass-gift-count", "1"), 1)
+                elif etype == "raid":
+                    amount = _safe_int(tags.get("msg-param-viewerCount", "0"), 0)
+                else:
+                    amount = 0
+                extra["event"] = {"type": etype, "text": etext, "amount": amount}
                 emotes = self._parse_emotes(tags.get("emotes", "")) if message else []
                 self.queue.put(("event", (user, message or "", emotes, extra)))
             except Exception:
@@ -2151,6 +2344,408 @@ class _TaggedQueue:
 
 
 # ============================================================
+#                 DonationAlerts (официальный API)
+# ============================================================
+class DonationAlerts:
+    """Интеграция с DonationAlerts через официальный OAuth API.
+    Пользователь создаёт своё приложение на donationalerts.com
+    (Client ID + Client secret), программа авторизуется через браузер
+    (redirect на локальный сервер) и раз в несколько секунд опрашивает
+    список донатов. Новые донаты → очередь UI: ("donation", dict)."""
+
+    AUTH = "https://www.donationalerts.com/oauth/authorize"
+    TOKEN = "https://www.donationalerts.com/oauth/token"
+    API = "https://www.donationalerts.com/api/v1"
+    SCOPE = "oauth-user-show oauth-donation-index"
+    POLL = 6.0
+    FILE = "donationalerts.json"
+
+    def __init__(self, data_dir: str, notify_q: queue.Queue):
+        self.path = os.path.join(data_dir, self.FILE)
+        self._notify = notify_q
+        self._lock = threading.Lock()
+        self.cfg = {"client_id": "", "client_secret": "", "access_token": "",
+                    "refresh_token": "", "expires_at": 0, "user": ""}
+        try:
+            with open(self.path, encoding="utf-8") as f:
+                d = json.load(f)
+            if isinstance(d, dict):
+                self.cfg.update(d)
+        except Exception:
+            pass
+        self._state = ""
+        self._seen: set = set()
+        self._primed = False
+        self._thread = None
+        self._stop = threading.Event()
+        self.status = "off"          # off | on | error
+        self.status_text = "не подключено"
+
+    # ---------- хранение ----------
+    def _save(self):
+        with self._lock:
+            try:
+                _json_write(self.path, self.cfg)
+            except Exception:
+                pass
+
+    @property
+    def connected(self) -> bool:
+        return bool(self.cfg.get("access_token"))
+
+    def set_app(self, client_id: str, client_secret: str):
+        client_id, client_secret = client_id.strip(), client_secret.strip()
+        if (client_id, client_secret) != (self.cfg.get("client_id"), self.cfg.get("client_secret")):
+            self.cfg.update({"client_id": client_id, "client_secret": client_secret})
+            self._save()
+
+    # ---------- HTTP ----------
+    @staticmethod
+    def _request(url: str, data: dict = None, token: str = ""):
+        import urllib.request
+        headers = {"User-Agent": "ChatOverlay", "Accept": "application/json"}
+        body = None
+        if data is not None:
+            body = urllib.parse.urlencode(data).encode("utf-8")
+            headers["Content-Type"] = "application/x-www-form-urlencoded"
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        req = urllib.request.Request(url, data=body, headers=headers)
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return json.loads(r.read().decode("utf-8", "replace"))
+
+    def _set_status(self, status: str, text: str):
+        if (status, text) != (self.status, self.status_text):
+            self.status, self.status_text = status, text
+            self._notify.put(("da_status", (status, text)))
+
+    # ---------- OAuth ----------
+    def auth_url(self, redirect_uri: str) -> str:
+        import secrets
+        self._state = secrets.token_urlsafe(16)
+        q = urllib.parse.urlencode({
+            "client_id": self.cfg["client_id"], "redirect_uri": redirect_uri,
+            "response_type": "code", "scope": self.SCOPE, "state": self._state})
+        return f"{self.AUTH}?{q}"
+
+    def _store_tokens(self, tok: dict):
+        self.cfg["access_token"] = tok.get("access_token", "")
+        if tok.get("refresh_token"):
+            self.cfg["refresh_token"] = tok["refresh_token"]
+        self.cfg["expires_at"] = time.time() + _safe_int(tok.get("expires_in", 0), 0) - 60
+        self._save()
+
+    def handle_callback(self, params: dict, redirect_uri: str):
+        """Вызывается HTTP-сервером на /da/callback. → (ok, текст)."""
+        if params.get("error"):
+            return False, f"DonationAlerts вернул ошибку: {params.get('error')}"
+        if not self._state or params.get("state") != self._state:
+            return False, "Неверный state — начните подключение заново из программы"
+        try:
+            tok = self._request(self.TOKEN, {
+                "grant_type": "authorization_code",
+                "client_id": self.cfg["client_id"],
+                "client_secret": self.cfg["client_secret"],
+                "redirect_uri": redirect_uri, "code": params.get("code", "")})
+            if not tok.get("access_token"):
+                raise RuntimeError(str(tok)[:200])
+            self._store_tokens(tok)
+            self._state = ""
+            self._load_user()
+            self.start()
+            return True, f"Подключено: {self.cfg.get('user') or 'аккаунт DonationAlerts'}"
+        except Exception as e:
+            self._set_status("error", f"ошибка авторизации: {e}")
+            return False, f"Не удалось получить токен: {e}"
+
+    def _refresh(self) -> bool:
+        if not self.cfg.get("refresh_token"):
+            return False
+        try:
+            tok = self._request(self.TOKEN, {
+                "grant_type": "refresh_token", "refresh_token": self.cfg["refresh_token"],
+                "client_id": self.cfg["client_id"], "client_secret": self.cfg["client_secret"],
+                "scope": self.SCOPE})
+            if tok.get("access_token"):
+                self._store_tokens(tok)
+                return True
+        except Exception:
+            pass
+        return False
+
+    def _load_user(self):
+        try:
+            d = self._request(f"{self.API}/user/oauth", token=self.cfg["access_token"])
+            self.cfg["user"] = ((d or {}).get("data") or {}).get("name", "") or self.cfg.get("user", "")
+            self._save()
+        except Exception:
+            pass
+
+    def disconnect(self):
+        self.stop()
+        self.cfg.update({"access_token": "", "refresh_token": "", "expires_at": 0, "user": ""})
+        self._save()
+        self._set_status("off", "не подключено")
+
+    # ---------- опрос донатов ----------
+    def start(self):
+        if not self.connected:
+            self._set_status("off", "не подключено")
+            return
+        if self._thread and self._thread.is_alive():
+            return
+        self._stop.clear()
+        self._primed = False
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+
+    def _fetch(self):
+        import urllib.error
+        if self.cfg.get("expires_at") and time.time() > self.cfg["expires_at"]:
+            self._refresh()
+        try:
+            return self._request(f"{self.API}/alerts/donations", token=self.cfg["access_token"])
+        except urllib.error.HTTPError as e:
+            if e.code == 401 and self._refresh():
+                return self._request(f"{self.API}/alerts/donations", token=self.cfg["access_token"])
+            raise
+
+    def _loop(self):
+        while not self._stop.is_set():
+            try:
+                d = self._fetch()
+                items = (d or {}).get("data") or []
+                fresh = []
+                for it in items:
+                    did = it.get("id")
+                    if did is None or did in self._seen:
+                        continue
+                    self._seen.add(did)
+                    if self._primed:
+                        fresh.append(it)
+                self._primed = True
+                for it in reversed(fresh):          # от старых к новым
+                    self._notify.put(("donation", it))
+                user = self.cfg.get("user") or "аккаунт"
+                self._set_status("on", f"подключено: {user}")
+            except Exception as e:
+                self._set_status("error", f"ошибка: {e}"[:120])
+            self._stop.wait(self.POLL)
+
+
+_DA_INSTANCE = None     # для HTTP-обработчика /da/callback
+
+
+# ============================================================
+#        Перевод сообщений и проверка обновлений
+# ============================================================
+class Translator:
+    """Перевод сообщений без ключа: Google Translate (основной),
+    MyMemory (запасной). Работает в фоне, результат — в очередь UI:
+    ("translated", (mid, text, lang)); ошибки — ("translate_error", msg)."""
+
+    GOOGLE = ("https://translate.googleapis.com/translate_a/single"
+              "?client=gtx&sl=auto&tl={tl}&dt=t&q={q}")
+    GOOGLE2 = ("https://clients5.google.com/translate_a/t"
+               "?client=dict-chrome-ex&sl=auto&tl={tl}&q={q}")
+    MYMEMORY = "https://api.mymemory.translated.net/get?q={q}&langpair={sl}|{tl}&mt=1"
+
+    def __init__(self, notify_q: queue.Queue):
+        self._q: queue.Queue = queue.Queue(maxsize=30)
+        self._notify = notify_q
+        self._cache: dict = {}
+        self._worker = None
+        self.last_error = ""
+        self._err_reported = 0.0
+        self._log_path = os.path.join(USER_DIR, "translate_debug.log")
+        self._cooldown: dict = {}          # провайдер -> time до которого не трогаем (429)
+
+    def log(self, text: str):
+        """Подробный журнал переводчика (translate_debug.log рядом с программой)."""
+        try:
+            if os.path.exists(self._log_path) and os.path.getsize(self._log_path) > 300_000:
+                os.replace(self._log_path, self._log_path + ".old")
+            with open(self._log_path, "a", encoding="utf-8") as f:
+                f.write(datetime.datetime.now().strftime("[%H:%M:%S] ") + text + "\n")
+        except Exception:
+            pass
+
+    # ---------- провайдеры ----------
+    @staticmethod
+    def _get(url: str):
+        import urllib.request
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+            "Accept": "application/json,text/plain,*/*"})
+        with urllib.request.urlopen(req, timeout=8) as r:
+            return json.loads(r.read().decode("utf-8", "replace"))
+
+    def _google(self, text: str, target: str):
+        url = self.GOOGLE.format(tl=target, q=urllib.parse.quote(text))
+        data = self._get(url)
+        self.log(f"Google raw: {json.dumps(data, ensure_ascii=False)[:300]}")
+        tr = "".join(seg[0] for seg in (data[0] or []) if seg and seg[0])
+        lang = data[2] if len(data) > 2 and isinstance(data[2], str) else ""
+        return tr.strip(), lang
+
+    def _google2(self, text: str, target: str):
+        """Второй эндпоинт Google (другой лимит запросов)."""
+        data = self._get(self.GOOGLE2.format(tl=target, q=urllib.parse.quote(text)))
+        self.log(f"Google2 raw: {json.dumps(data, ensure_ascii=False)[:300]}")
+        lang = ""
+        if isinstance(data, list) and data:
+            first = data[0]
+            if isinstance(first, list):          # [["перевод", "en"]]
+                tr = str(first[0]) if first else ""
+                lang = str(first[1]) if len(first) > 1 else ""
+            else:                                  # ["перевод"]
+                tr = str(first)
+        elif isinstance(data, dict):               # {"sentences":[{"trans":..}],"src":"en"}
+            tr = "".join(x.get("trans", "") for x in data.get("sentences", []))
+            lang = data.get("src", "")
+        else:
+            tr = ""
+        return tr.strip(), lang
+
+    def _mymemory(self, text: str, target: str):
+        src = "ru" if _CYR_RE.search(text) else "en"
+        if src == target:
+            return "", src
+        data = self._get(self.MYMEMORY.format(
+            q=urllib.parse.quote(text), sl=src, tl=target))
+        self.log(f"MyMemory raw: {json.dumps(data, ensure_ascii=False)[:300]}")
+        tr = ((data or {}).get("responseData") or {}).get("translatedText") or ""
+        if "MYMEMORY WARNING" in tr.upper():
+            raise RuntimeError("MyMemory: превышен дневной лимит")
+        if tr.strip().lower() == text.strip().lower():
+            # в «памяти переводов» иногда лежит непереведённый вариант —
+            # берём лучший из остальных совпадений, где текст реально переведён
+            want_cyr = target in ("ru", "uk")
+            for m in sorted((data or {}).get("matches") or [],
+                            key=lambda m: float(m.get("match") or 0), reverse=True):
+                cand = str(m.get("translation") or "").strip()
+                if not cand or cand.lower() == text.strip().lower():
+                    continue
+                if want_cyr and not _CYR_RE.search(cand):
+                    continue
+                tr = cand
+                break
+        return tr.strip(), src
+
+    def translate_now(self, text: str, target: str):
+        """Синхронный перевод (для кнопки «Проверить»). (tr, lang, provider)."""
+        errors = []
+        for name, fn in (("Google", self._google), ("Google2", self._google2),
+                         ("MyMemory", self._mymemory)):
+            if self._cooldown.get(name, 0) > time.time():
+                errors.append(f"{name}: пауза после 429")
+                continue
+            t0 = time.time()
+            try:
+                tr, lang = fn(text, target)
+                self.log(f"{name} {time.time() - t0:.1f}s lang={lang!r} -> {tr!r}")
+                if tr and tr.strip().lower() != text.strip().lower():
+                    return tr, lang, name
+                if tr and lang == target:
+                    return tr, lang, name          # текст уже на нужном языке
+                errors.append(f"{name}: вернул текст без перевода")
+            except Exception as e:
+                self.log(f"{name} {time.time() - t0:.1f}s ОШИБКА {type(e).__name__}: {e}")
+                errors.append(f"{name}: {e}")
+                if "429" in str(e):
+                    self._cooldown[name] = time.time() + 600   # 10 минут не дёргаем
+        raise RuntimeError("; ".join(errors))
+
+    # ---------- очередь ----------
+    def request(self, mid: str, text: str, target: str):
+        self.log(f"запрос [{target}] {text!r}")
+        key = (text, target)
+        if key in self._cache:
+            res = self._cache[key]
+            if res:
+                self._notify.put(("translated", (mid, res[0], res[1])))
+            return
+        try:
+            self._q.put_nowait((mid, text, target))
+        except queue.Full:
+            return
+        if self._worker is None or not self._worker.is_alive():
+            self._worker = threading.Thread(target=self._loop, daemon=True)
+            self._worker.start()
+
+    def _loop(self):
+        while True:
+            try:
+                mid, text, target = self._q.get(timeout=30)
+            except queue.Empty:
+                return
+            res = None
+            try:
+                tr, lang, _prov = self.translate_now(text, target)
+                self.last_error = ""
+                same = tr.strip().lower() == text.strip().lower()
+                if tr and lang != target and not same:
+                    res = (tr, lang)
+                else:
+                    self._notify.put(("translate_skip", (text, lang)))
+                if len(self._cache) > 500:
+                    self._cache.clear()
+                self._cache[(text, target)] = res      # кэшируем только успешные запросы
+            except Exception as e:
+                self.last_error = str(e)
+                now = time.time()
+                if now - self._err_reported > 60:    # не чаще раза в минуту
+                    self._err_reported = now
+                    self._notify.put(("translate_error", self.last_error))
+            if res:
+                self._notify.put(("translated", (mid, res[0], res[1])))
+            time.sleep(0.25)
+
+
+_CYR_RE = re.compile(r"[А-Яа-яЁёІіЇїЄєҐґ]")
+_LETTERS_RE = re.compile(r"[^\W\d_]", re.UNICODE)
+
+
+def needs_translation(text: str, target: str) -> bool:
+    """Переводим всё, где есть буквы, кроме команд «!…» и сообщений,
+    уже написанных на целевом языке (кириллица при переводе на ru/uk)."""
+    t = (text or "").strip()
+    if not _LETTERS_RE.search(t) or t.startswith("!"):
+        return False
+    if target in ("ru", "uk") and _CYR_RE.search(t):
+        return False
+    return True
+
+
+def _ver_tuple(v: str) -> tuple:
+    return tuple(int(x) for x in re.findall(r"\d+", v or "")[:3]) or (0,)
+
+
+def check_github_update(notify_q: queue.Queue, manual: bool = False):
+    """Фоновая проверка последнего релиза на GitHub."""
+    def _work():
+        import urllib.request
+        try:
+            req = urllib.request.Request(
+                f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest",
+                headers={"User-Agent": "ChatOverlay", "Accept": "application/vnd.github+json"})
+            with urllib.request.urlopen(req, timeout=10) as r:
+                data = json.loads(r.read().decode("utf-8", "replace"))
+            tag = str(data.get("tag_name", ""))
+            url = str(data.get("html_url", f"https://github.com/{GITHUB_REPO}/releases"))
+            if _ver_tuple(tag) > _ver_tuple(APP_VERSION):
+                notify_q.put(("update", (tag, url, manual)))
+            else:
+                notify_q.put(("update", ("", url, manual)))
+        except Exception as e:
+            notify_q.put(("update", (None, str(e), manual)))
+    threading.Thread(target=_work, daemon=True).start()
+
+
+# ============================================================
 #                Звуковые уведомления
 # ============================================================
 class SoundPlayer:
@@ -2409,6 +3004,14 @@ class ChatOverlay(tk.Tk):
         self.third_party_emotes = bool(self.cfg.get("third_party_emotes", True))
         self.show_events = bool(self.cfg.get("show_events", True))
         self.mod_sync = bool(self.cfg.get("mod_sync", True))
+        self.hide_bots = bool(self.cfg.get("hide_bots", False))
+        self.hide_commands = bool(self.cfg.get("hide_commands", False))
+        self.show_first = bool(self.cfg.get("show_first", True))
+        self.translate_on = bool(self.cfg.get("translate_enabled", False))
+        self.translate_to = str(self.cfg.get("translate_to", "ru"))
+        self.check_updates = bool(self.cfg.get("check_updates", True))
+        self._update_info = None
+        self._stats_reset()
         self._tpe = ThirdPartyEmotes()
         # ---- звуки ----
         self.sound = {
@@ -2428,6 +3031,16 @@ class ChatOverlay(tk.Tk):
         self._sound_last = 0.0
         self._room_ids: dict = {}         # tag -> twitch room-id
         self._emotes = EmoteCache(self.msg_queue)
+        self._translator = Translator(self.msg_queue)
+        global _DA_INSTANCE
+        self.show_donations = bool(self.cfg.get("show_donations", True))
+        self._da = DonationAlerts(USER_DIR, self.msg_queue)
+        _DA_INSTANCE = self._da
+        self._da_status_cb = None
+        if self._da.connected:
+            self.after(2500, self._da.start)
+        if self.check_updates:
+            self.after(4000, lambda: check_github_update(self.msg_queue))
         self._emote_pending: dict = {}   # eid -> [(placeholder_tag, height)]
         self._emote_seq = 0
 
@@ -2723,7 +3336,7 @@ class ChatOverlay(tk.Tk):
                             background=self.BG, foreground=self.TEXT_MUTED,
                             bordercolor=self.BG, lightcolor=self.BG,
                             darkcolor=self.BG, borderwidth=0,
-                            padding=(16, 7), font=("Segoe UI Semibold", 9),
+                            padding=(11, 7), font=("Segoe UI Semibold", 9),
                             focuscolor=self.BG)
         nb_style.map("Settings.TNotebook.Tab",
                      background=[("selected", self.BG_ELEV), ("active", self.BG_INPUT)],
@@ -2738,7 +3351,7 @@ class ChatOverlay(tk.Tk):
 
         # ========== Вкладка 1: OBS ==========
         obs_tab = tk.Frame(nb, bg=self.BG_ELEV, padx=16, pady=12)
-        nb.add(obs_tab, text="  OBS  ")
+        nb.add(obs_tab, text="OBS")
 
         enabled_var = tk.BooleanVar(value=self._obs_enabled)
         port_var = tk.StringVar(value=str(self._obs_port))
@@ -2809,26 +3422,26 @@ class ChatOverlay(tk.Tk):
 
         def _link_row(icon, color, title, path, first=False):
             row = tk.Frame(links_card, bg=self.BG_INPUT)
-            row.pack(fill="x", pady=(0 if first else 10, 0))
-            ic = tk.Canvas(row, width=32, height=32, bg=self.BG_INPUT,
+            row.pack(fill="x", pady=(0 if first else 6, 0))
+            ic = tk.Canvas(row, width=26, height=26, bg=self.BG_INPUT,
                            highlightthickness=0, bd=0)
             ic.pack(side="left")
-            self._ui_round_rect(ic, 0, 0, 32, 32, 8,
+            self._ui_round_rect(ic, 0, 0, 26, 26, 7,
                                 fill=_blend_color(self.BG_INPUT, color, 0.22), outline="")
-            ic.create_text(16, 16, text=icon, fill=color,
-                           font=("Segoe UI Symbol", 12, "bold"))
+            ic.create_text(13, 13, text=icon, fill=color,
+                           font=("Segoe UI Symbol", 10, "bold"))
             btn = tk.Label(row, text="Копировать", bg=self.BG_ELEV, fg=self.TEXT,
-                           width=12, pady=6, cursor="hand2",
+                           width=12, pady=3, cursor="hand2",
                            font=("Segoe UI Semibold", 9),
                            highlightthickness=1, highlightbackground=self.BORDER)
             btn.pack(side="right")
             txt = tk.Frame(row, bg=self.BG_INPUT)
-            txt.pack(side="left", fill="x", expand=True, padx=(10, 8))
+            txt.pack(side="left", fill="x", expand=True, padx=(8, 8))
             tk.Label(txt, text=title, bg=self.BG_INPUT, fg=self.TEXT, anchor="w",
-                     font=("Segoe UI Semibold", 10)).pack(fill="x")
-            url_lbl = tk.Label(txt, text="", bg=self.BG_INPUT, fg=self.TEXT_MUTED,
+                     font=("Segoe UI Semibold", 9)).pack(side="left")
+            url_lbl = tk.Label(txt, text="", bg=self.BG_INPUT, fg=self.TEXT_DIM,
                                anchor="w", font=("Consolas", 8))
-            url_lbl.pack(fill="x")
+            url_lbl.pack(side="left", padx=(6, 0))
             url_labels.append((url_lbl, path))
 
             st = {"done": False}
@@ -2851,11 +3464,12 @@ class ChatOverlay(tk.Tk):
         _link_row("▣", self.ACCENT, "Browser Source", "/obs/browser", first=True)
         _link_row("▤", "#4fc3f7", "Dock-панель", "/obs/dock")
         _link_row("◉", "#ffb347", "Сообщение на экран", "/obs/featured")
+        _link_row("◎", "#3ddc84", "Цель стрима", "/obs/goal")
+        _link_row("◷", "#ff6bcb", "Последние события", "/obs/recent")
 
         def _refresh_urls(*_):
-            base = _base_url()
             for lbl, path in url_labels:
-                lbl.config(text=base + path)
+                lbl.config(text=path)
 
         port_var.trace_add("write", _refresh_urls)
         _refresh_urls()
@@ -2935,7 +3549,7 @@ class ChatOverlay(tk.Tk):
 
         # ========== Вкладка 2: Оформление ==========
         theme_tab = tk.Frame(nb, bg=self.BG_ELEV, padx=16, pady=12)
-        nb.add(theme_tab, text="  Оформление  ")
+        nb.add(theme_tab, text="Тема")
 
         # исходные значения — если закрыть без «Применить», откатываем превью
         orig_look = {
@@ -2992,7 +3606,7 @@ class ChatOverlay(tk.Tk):
 
         # ========== Вкладка 3: Фильтры ==========
         filter_tab = tk.Frame(nb, bg=self.BG_ELEV, padx=16, pady=12)
-        nb.add(filter_tab, text="  Фильтры  ")
+        nb.add(filter_tab, text="Фильтры")
 
         self._ui_section(filter_tab, "ФИЛЬТРЫ ЧАТА",
                          "Enter — добавить, × — удалить")
@@ -3002,6 +3616,16 @@ class ChatOverlay(tk.Tk):
 
         def _norm_user(w):
             return w.strip().lstrip("@").lower()
+
+        filt = {"bots": self.hide_bots, "cmds": self.hide_commands}
+        bot_card = self._ui_card(filter_tab)
+        self._ui_toggle(bot_card, "Скрывать ботов",
+                        "Nightbot, StreamElements, Moobot и ещё ~40",
+                        self.hide_bots, lambda on: filt.__setitem__("bots", on))
+        self._ui_toggle(bot_card, "Скрывать команды",
+                        "Сообщения, начинающиеся с «!»",
+                        self.hide_commands, lambda on: filt.__setitem__("cmds", on),
+                        pady=(8, 0))
 
         hl_items = self._ui_chip_list(
             filter_tab, "Подсветка", "★", self.WARN,
@@ -3021,7 +3645,7 @@ class ChatOverlay(tk.Tk):
 
         # ========== Вкладка 4: Сообщения ==========
         msg_tab = tk.Frame(nb, bg=self.BG_ELEV, padx=16, pady=12)
-        nb.add(msg_tab, text="  Сообщения  ")
+        nb.add(msg_tab, text="Чат")
 
         orig_look["msg_style"] = self.msg_style
         orig_look["emotes"] = self.show_emotes
@@ -3079,6 +3703,13 @@ class ChatOverlay(tk.Tk):
             self.show_events,
             lambda on: chat_opts.__setitem__("events", on), pady=(12, 0),
         )
+        chat_opts["first"] = self.show_first
+        self._ui_toggle(
+            emo_card, "Новые зрители",
+            "Первое сообщение зрителя на канале — 👋 и зелёный фон",
+            self.show_first,
+            lambda on: chat_opts.__setitem__("first", on), pady=(12, 0),
+        )
         self._ui_toggle(
             emo_card, "Синхронизация с модерацией",
             "Удалённое модераторами исчезает из чата и OBS",
@@ -3088,7 +3719,7 @@ class ChatOverlay(tk.Tk):
 
         # ========== Вкладка 5: Звук ==========
         snd_tab = tk.Frame(nb, bg=self.BG_ELEV, padx=16, pady=10)
-        nb.add(snd_tab, text="  Звук  ")
+        nb.add(snd_tab, text="Звук")
         snd = dict(self.sound)          # правки применяются по «Применить»
 
         self._ui_section(snd_tab, "КОГДА ИГРАТЬ ЗВУК")
@@ -3102,7 +3733,7 @@ class ChatOverlay(tk.Tk):
         self._ui_toggle(when_card, "Подсветка из «Фильтров»",
                         None, snd["hl"],
                         lambda on: snd.__setitem__("hl", on), pady=(10, 0))
-        self._ui_toggle(when_card, "События канала",
+        self._ui_toggle(when_card, "События и новые зрители",
                         None, snd["events"],
                         lambda on: snd.__setitem__("events", on), pady=(10, 0))
         self._ui_toggle(when_card, "Каждое сообщение",
@@ -3193,6 +3824,265 @@ class ChatOverlay(tk.Tk):
             tb.bind("<Button-1>", lambda e, k=kind: _test(k))
             self._hover(tb, self.ACCENT, self.ACCENT_HOV, "#ffffff", "#ffffff")
 
+        # ========== Вкладка 6: Ещё ==========
+        more_tab = tk.Frame(nb, bg=self.BG_ELEV, padx=16, pady=10)
+        nb.add(more_tab, text="Ещё")
+        more = {"tr": self.translate_on, "to": self.translate_to,
+                "upd": self.check_updates}
+
+        # ---- перевод ----
+        self._ui_section(more_tab, "ПЕРЕВОД СООБЩЕНИЙ")
+        tr_card = self._ui_card(more_tab)
+        self._ui_toggle(tr_card, "Переводить иностранные сообщения",
+                        "Google Translate, запасной — MyMemory; нужен интернет",
+                        more["tr"], lambda on: more.__setitem__("tr", on))
+        lang_row = tk.Frame(tr_card, bg=self.BG_INPUT)
+        lang_row.pack(fill="x", pady=(10, 0))
+        tk.Label(lang_row, text="На язык:", bg=self.BG_INPUT, fg=self.TEXT_MUTED,
+                 font=("Segoe UI", 9)).pack(side="left", padx=(0, 8))
+        lang_btns = {}
+
+        def _paint_lang():
+            for k, b in lang_btns.items():
+                on = more["to"] == k
+                b.config(bg=self.ACCENT if on else self.BG_ELEV,
+                         fg="#ffffff" if on else self.TEXT)
+
+        for code, name in (("ru", "Русский"), ("en", "English"), ("uk", "Українська")):
+            b = tk.Label(lang_row, text=name, padx=10, pady=3, cursor="hand2",
+                         font=("Segoe UI Semibold", 9),
+                         highlightthickness=1, highlightbackground=self.BORDER)
+            b.pack(side="left", padx=(0, 6))
+            b.bind("<Button-1>", lambda e, c=code: (more.__setitem__("to", c), _paint_lang()))
+            lang_btns[code] = b
+        _paint_lang()
+
+        trt_row = tk.Frame(tr_card, bg=self.BG_INPUT)
+        trt_row.pack(fill="x", pady=(10, 0))
+        trt_lbl = tk.Label(trt_row, text="", bg=self.BG_INPUT, fg=self.TEXT_MUTED,
+                           anchor="w", justify="left", wraplength=300,
+                           font=("Segoe UI", 9))
+        trt_lbl.pack(side="left", fill="x", expand=True)
+
+        def _test_tr():
+            trt_lbl.config(text="Проверяю…", fg=self.TEXT_MUTED)
+            target = more["to"]
+            sample = "Hello! How are you?" if target != "en" else "Привет! Как дела?"
+
+            def work():
+                try:
+                    tr, lang, prov = self._translator.translate_now(sample, target)
+                    msg, col = f"✓ {prov}: «{tr}»", self.OK
+                except Exception as e:
+                    msg, col = f"✗ {e}"[:220], self.DANGER
+                try:
+                    self.after(0, lambda: trt_lbl.winfo_exists() and trt_lbl.config(text=msg, fg=col))
+                except Exception:
+                    pass
+            threading.Thread(target=work, daemon=True).start()
+
+        trt_btn = tk.Label(trt_row, text="Проверить перевод", bg=self.BG_ELEV, fg=self.TEXT,
+                           padx=10, pady=4, cursor="hand2", font=("Segoe UI Semibold", 9),
+                           highlightthickness=1, highlightbackground=self.BORDER)
+        trt_btn.pack(side="right")
+        trt_btn.bind("<Button-1>", lambda e: _test_tr())
+        if self._translator.last_error:
+            trt_lbl.config(text=f"✗ {self._translator.last_error}"[:220], fg=self.DANGER)
+
+        # ---- статистика ----
+        self._ui_section(more_tab, "СТАТИСТИКА", pady=(14, 0))
+        st_card = self._ui_card(more_tab)
+        st_row = tk.Frame(st_card, bg=self.BG_INPUT)
+        st_row.pack(fill="x")
+        st_lbl = tk.Label(st_row, bg=self.BG_INPUT, fg=self.TEXT, anchor="w",
+                          justify="left", font=("Segoe UI", 10))
+        st_lbl.pack(side="left", fill="x", expand=True)
+        st_btn = tk.Label(st_row, text="Открыть  ›", bg=self.ACCENT, fg="#ffffff",
+                          padx=12, pady=5, cursor="hand2", font=("Segoe UI Semibold", 9))
+        st_btn.pack(side="right")
+        st_btn.bind("<Button-1>", lambda e: self._open_stats())
+        self._hover(st_btn, self.ACCENT, self.ACCENT_HOV, "#ffffff", "#ffffff")
+
+        def _st_refresh():
+            if not st_lbl.winfo_exists():
+                return
+            st = self._stats
+            st_lbl.config(text=f"{st['msgs']} сообщений · {self._stats_rate()}/мин\n"
+                               f"{len(st['chatters'])} пишут · {len(st['first'])} новичков")
+            st_lbl.after(3000, _st_refresh)
+        _st_refresh()
+        tk.Label(st_card, text="Тоже открывается кликом по счётчику в строке статуса",
+                 bg=self.BG_INPUT, fg=self.TEXT_DIM, font=("Segoe UI", 8),
+                 anchor="w").pack(fill="x", pady=(6, 0))
+
+        # ---- о программе / обновления ----
+        self._ui_section(more_tab, "О ПРОГРАММЕ", pady=(14, 0))
+        ab_card = self._ui_card(more_tab)
+        ab_row = tk.Frame(ab_card, bg=self.BG_INPUT)
+        ab_row.pack(fill="x")
+        tk.Label(ab_row, text=f"Chat Overlay  v{APP_VERSION} - {APP_CHANNEL}", bg=self.BG_INPUT,
+                 fg=self.TEXT, font=("Segoe UI Semibold", 11)).pack(side="left")
+        gh = tk.Label(ab_row, text="GitHub ↗", bg=self.BG_INPUT, fg=self.ACCENT,
+                      cursor="hand2", font=("Segoe UI Semibold", 9))
+        gh.pack(side="right")
+        gh.bind("<Button-1>", lambda e: webbrowser.open(f"https://github.com/{GITHUB_REPO}"))
+        self._ui_toggle(ab_card, "Проверять обновления при запуске",
+                        "Сравнивает с последним релизом на GitHub",
+                        more["upd"], lambda on: more.__setitem__("upd", on), pady=(10, 0))
+        upd_row = tk.Frame(ab_card, bg=self.BG_INPUT)
+        upd_row.pack(fill="x", pady=(10, 0))
+        upd_lbl = tk.Label(upd_row, text="", bg=self.BG_INPUT, fg=self.TEXT_MUTED,
+                           anchor="w", font=("Segoe UI", 9), cursor="hand2")
+        upd_lbl.pack(side="left", fill="x", expand=True)
+
+        def _show_update(tag, url):
+            if not upd_lbl.winfo_exists():
+                return
+            if tag:
+                upd_lbl.config(text=f"⬆ Доступна версия {tag} — открыть", fg=self.OK)
+                upd_lbl.bind("<Button-1>", lambda e: webbrowser.open(url))
+            elif tag == "":
+                upd_lbl.config(text="✓ Установлена последняя версия", fg=self.TEXT_MUTED)
+            else:
+                upd_lbl.config(text="Нет релизов или сети",
+                               fg=self.TEXT_DIM)
+
+        self._update_cb = _show_update
+        if self._update_info:
+            _show_update(*self._update_info)
+
+        def _check_now():
+            upd_lbl.config(text="Проверяю…", fg=self.TEXT_MUTED)
+            check_github_update(self.msg_queue, manual=True)
+
+        ub = tk.Label(upd_row, text="Проверить сейчас", bg=self.BG_ELEV, fg=self.TEXT,
+                      padx=10, pady=4, cursor="hand2", font=("Segoe UI Semibold", 9),
+                      highlightthickness=1, highlightbackground=self.BORDER)
+        ub.pack(side="right")
+        ub.bind("<Button-1>", lambda e: _check_now())
+
+        # ========== Вкладка 7: Донаты (DonationAlerts) ==========
+        da_tab = tk.Frame(nb, bg=self.BG_ELEV, padx=16, pady=10)
+        nb.add(da_tab, text="Донаты")
+        da = self._da
+        da_opts = {"show": self.show_donations}
+
+        self._ui_section(da_tab, "DONATIONALERTS")
+        da_card = self._ui_card(da_tab)
+        st_row = tk.Frame(da_card, bg=self.BG_INPUT)
+        st_row.pack(fill="x")
+        da_pill = tk.Label(st_row, text="", padx=10, pady=2, font=("Segoe UI Semibold", 8))
+        da_pill.pack(side="left")
+
+        def _paint_status(status=None, text=None):
+            if not da_pill.winfo_exists():
+                return
+            status = status or da.status
+            text = text or da.status_text
+            col = {"on": self.OK, "error": self.DANGER}.get(status, self.TEXT_DIM)
+            da_pill.config(text=f"●  {text}", fg=col, bg=_blend_color(self.BG_INPUT, col, 0.16))
+            conn_btn.config(text="Отключить" if da.connected else "Подключить")
+
+        def _entry_row(label, value, show=None):
+            row = tk.Frame(da_card, bg=self.BG_INPUT)
+            row.pack(fill="x", pady=(10, 0))
+            tk.Label(row, text=label, bg=self.BG_INPUT, fg=self.TEXT, width=13, anchor="w",
+                     font=("Segoe UI", 10)).pack(side="left")
+            wrap = tk.Frame(row, bg=self.BORDER, padx=1, pady=1)
+            wrap.pack(side="left", fill="x", expand=True)
+            var = tk.StringVar(value=value)
+            ent = tk.Entry(wrap, textvariable=var, bg=self.BG_ELEV, fg=self.TEXT, show=show or "",
+                           insertbackground=self.ACCENT, relief="flat", bd=0,
+                           highlightthickness=0, font=("Consolas", 10))
+            ent.pack(fill="x", ipady=4, padx=8)
+            ent.bind("<FocusIn>", lambda e: wrap.config(bg=self.ACCENT))
+            ent.bind("<FocusOut>", lambda e: wrap.config(bg=self.BORDER))
+            return var
+
+        id_var = _entry_row("Client ID", da.cfg.get("client_id", ""))
+        sec_var = _entry_row("Client secret", da.cfg.get("client_secret", ""), show="•")
+
+        btn_row = tk.Frame(da_card, bg=self.BG_INPUT)
+        btn_row.pack(fill="x", pady=(12, 0))
+        da_err = tk.Label(btn_row, text="", bg=self.BG_INPUT, fg=self.DANGER,
+                          font=("Segoe UI", 9), anchor="w")
+
+        def _connect():
+            if da.connected:
+                da.disconnect()
+                _paint_status()
+                return
+            cid, sec = id_var.get().strip(), sec_var.get().strip()
+            if not cid.isdigit() or not sec:
+                da_err.config(text="Впиши Client ID (число) и Client secret")
+                return
+            if not self._obs_server:
+                da_err.config(text="Включи веб-страницу на вкладке OBS и нажми «Применить»")
+                return
+            da_err.config(text="")
+            da.set_app(cid, sec)
+            webbrowser.open(da.auth_url(self._da_redirect()))
+            da._set_status("off", "ожидаю вход в браузере…")
+            _paint_status()
+
+        conn_btn = tk.Label(btn_row, text="Подключить", bg=self.ACCENT, fg="#ffffff",
+                            padx=14, pady=6, cursor="hand2", font=("Segoe UI Semibold", 9))
+        conn_btn.pack(side="left")
+        conn_btn.bind("<Button-1>", lambda e: _connect())
+        self._hover(conn_btn, self.ACCENT, self.ACCENT_HOV, "#ffffff", "#ffffff")
+
+        def _test_don():
+            self.msg_queue.put(("donation", {
+                "id": f"test{int(time.time() * 1000)}", "username": "Тестовый донатер",
+                "message": "Это тестовый донат — проверка оформления!", "amount": 150,
+                "currency": "RUB", "message_type": "text"}))
+
+        test_btn = tk.Label(btn_row, text="Тестовый донат", bg=self.BG_ELEV, fg=self.TEXT,
+                            padx=10, pady=6, cursor="hand2", font=("Segoe UI Semibold", 9),
+                            highlightthickness=1, highlightbackground=self.BORDER)
+        test_btn.pack(side="left", padx=(8, 0))
+        test_btn.bind("<Button-1>", lambda e: _test_don())
+        da_err.pack(side="left", padx=(10, 0))
+
+        self._ui_toggle(da_card, "Показывать донаты в чате и OBS",
+                        "Цель и лента событий считают донаты всегда",
+                        self.show_donations, lambda on: da_opts.__setitem__("show", on),
+                        pady=(12, 0))
+
+        # ---- как подключить ----
+        self._ui_section(da_tab, "КАК ПОДКЛЮЧИТЬ (ОДИН РАЗ)", pady=(14, 0))
+        how = self._ui_card(da_tab)
+        steps = ("1. Открой donationalerts.com → Приложения и нажми «Создать»",
+                 "2. В «URL перенаправления» вставь адрес ниже",
+                 "3. Вставь сюда ID и Ключ API → «Подключить» → «Разрешить»")
+        for t_ in steps:
+            tk.Label(how, text=t_, bg=self.BG_INPUT, fg=self.TEXT_MUTED, anchor="w",
+                     justify="left", font=("Segoe UI", 9)).pack(fill="x", pady=1)
+        red_row = tk.Frame(how, bg=self.BG_INPUT)
+        red_row.pack(fill="x", pady=(8, 0))
+        red_lbl = tk.Label(red_row, text=self._da_redirect(), bg=self.BG_INPUT, fg=self.TEXT,
+                           anchor="w", font=("Consolas", 9))
+        red_lbl.pack(side="left", fill="x", expand=True)
+
+        def _copy_red(e=None):
+            self._copy_to_clipboard(self._da_redirect())
+            cp.config(text="✓ Скопировано", fg=self.OK)
+            cp.after(1500, lambda: cp.config(text="Копировать", fg=self.TEXT))
+
+        cp = tk.Label(red_row, text="Копировать", bg=self.BG_ELEV, fg=self.TEXT, padx=10, pady=3,
+                      cursor="hand2", font=("Segoe UI Semibold", 9),
+                      highlightthickness=1, highlightbackground=self.BORDER)
+        cp.pack(side="right")
+        cp.bind("<Button-1>", _copy_red)
+        op = tk.Label(how, text="Открыть страницу приложений DonationAlerts ↗", bg=self.BG_INPUT,
+                      fg=self.ACCENT, cursor="hand2", anchor="w", font=("Segoe UI Semibold", 9))
+        op.pack(fill="x", pady=(8, 0))
+        op.bind("<Button-1>", lambda e: webbrowser.open(
+            "https://www.donationalerts.com/application/clients"))
+
+        self._da_status_cb = _paint_status
+        _paint_status()
+
         # ========== Нижние кнопки ==========
         btns = tk.Frame(outer, bg=self.BG)
         btns.pack(fill="x", pady=(10, 0))
@@ -3253,12 +4143,22 @@ class ChatOverlay(tk.Tk):
             self.show_emotes = bool(emotes_var.get())
             self.show_events = bool(chat_opts["events"])
             self.mod_sync = bool(chat_opts["mod"])
+            self.show_first = bool(chat_opts["first"])
+            self.hide_bots = bool(filt["bots"])
+            self.hide_commands = bool(filt["cmds"])
             if chat_opts["tpe"] and not self.third_party_emotes:
                 for rid in self._room_ids.values():
                     self._tpe.load_room(rid)
             self.third_party_emotes = bool(chat_opts["tpe"])
             # звук
             self.sound = dict(snd)
+            # ещё
+            self.translate_on = bool(more["tr"])
+            self.translate_to = more["to"]
+            self.check_updates = bool(more["upd"])
+            self.show_donations = bool(da_opts["show"])
+            if id_var.get().strip() or sec_var.get().strip():
+                self._da.set_app(id_var.get(), sec_var.get())
 
             self._save_config()
             _close()
@@ -3796,7 +4696,14 @@ class ChatOverlay(tk.Tk):
             bar, text="0 сообщений", bg=self.BG_ELEV, fg=self.TEXT_DIM,
             font=self.fnt_small, padx=10)
         self.count_lbl.pack(side="right")
+        self.count_lbl.config(cursor="hand2")
+        self.update_lbl = tk.Label(bar, text="", bg=self.BG_ELEV, fg=self.ACCENT,
+                                   font=("Segoe UI Semibold", 8), cursor="hand2", padx=6)
+        self.update_lbl.bind("<Button-1>", lambda e: webbrowser.open(
+            (self._update_info or ("", f"https://github.com/{GITHUB_REPO}/releases"))[1]))
+        self.count_lbl.bind("<Button-1>", lambda e: self._open_stats())
         self._msg_count = 0
+        self.after(5000, self._tick_count_lbl)
 
     def _build_chat(self, parent):
         body = tk.Frame(parent, bg=self.BG)
@@ -4055,6 +4962,13 @@ class ChatOverlay(tk.Tk):
             "third_party_emotes": self.third_party_emotes,
             "show_events": self.show_events,
             "mod_sync": self.mod_sync,
+            "hide_bots": self.hide_bots,
+            "hide_commands": self.hide_commands,
+            "show_first": self.show_first,
+            "translate_enabled": self.translate_on,
+            "translate_to": self.translate_to,
+            "check_updates": self.check_updates,
+            "show_donations": self.show_donations,
             "sound_enabled": self.sound["enabled"],
             "sound_hl": self.sound["hl"],
             "sound_events": self.sound["events"],
@@ -4545,6 +5459,17 @@ class ChatOverlay(tk.Tk):
         except Exception:
             pass
 
+        try:
+            self.text.tag_configure(
+                "row_first",
+                background=_blend_color(BG, self.OK, 0.18),
+                **{k: self.text.tag_cget("row_even", k) or 0 for k in
+                   ("spacing1", "spacing3", "lmargin1", "lmargin2")})
+            self.text.tag_configure("first_mark", foreground=self.OK,
+                                    font=self.fnt_time)
+        except Exception:
+            pass
+
         # per-канальные теги (из стиля «glow») приводим к текущему стилю
         if style != "glow":
             for i in range(len(self._ch_list)):
@@ -4762,6 +5687,9 @@ class ChatOverlay(tk.Tk):
         if is_hl:
             row_tag = "row_hl"
         ev = extra.get("event")
+        first = bool(extra.get("first")) and not ev
+        if first and not is_hl:
+            row_tag = "row_first"
 
         if ev:
             et = ev.get("type", "other")
@@ -4779,6 +5707,14 @@ class ChatOverlay(tk.Tk):
                 segs += self._msg_segments(msg, emotes, "msg")
             else:
                 segs.append(("\n", "msg"))
+        elif first:
+            segs = (
+                [("👋 новый зритель  ", "first_mark"), (f"{ts}  ", "time")]
+                + src_segs
+                + [(user, self._nick_tag(user)),
+                   (": ", "colon")]
+                + self._msg_segments(msg, emotes, "msg")
+            )
         elif is_hl:
             segs = (
                 [("★ ", "highlight_mark"), (f"{ts}  ", "time")]
@@ -4813,7 +5749,7 @@ class ChatOverlay(tk.Tk):
         else:
             self._save_history_line(f"[{ts}] [{tag}] {user}: {msg}")
         self._msg_count += 1
-        self.count_lbl.config(text=f"{self._msg_count} сообщений")
+        self._update_count_lbl()
 
     def _set_status(self, state, text=None):
         """Прямая установка статуса (backward compat)."""
@@ -4830,15 +5766,23 @@ class ChatOverlay(tk.Tk):
     # ============================================================
     EVENT_COLORS = {
         "sub": "#a970ff", "gift": "#ff6bcb", "raid": "#ff9f1c",
-        "cheer": "#f5c518", "announcement": "#4fc3f7", "other": "#8b91a7",
+        "cheer": "#f5c518", "announcement": "#4fc3f7", "donation": "#f57d07",
+        "other": "#8b91a7",
     }
     EVENT_ICONS = {
         "sub": "★", "gift": "🎁", "raid": "⚑", "cheer": "◆",
-        "announcement": "📣", "other": "•",
+        "announcement": "📣", "donation": "💰", "other": "•",
     }
 
     def _handle_chat(self, tag, user, msg, emotes, extra):
         ev = extra.get("event")
+        # цель стрима и лента событий считаются всегда, даже если
+        # показ событий в чате выключен
+        if ev and self._obs_server:
+            try:
+                self._obs_server.record_event(ev, user)
+            except Exception:
+                pass
         if ev and not self.show_events:
             # события выключены: сообщение-объявление/читер показываем как обычное
             if not (msg or "").strip():
@@ -4847,6 +5791,14 @@ class ChatOverlay(tk.Tk):
             ev = None
         if self._is_banned(user, msg or ""):
             return
+        login = (extra.get("login") or user or "").lower()
+        if self.hide_bots and login in KNOWN_BOTS:
+            return
+        if self.hide_commands and not ev and (msg or "").lstrip().startswith("!"):
+            return
+        if not self.show_first:
+            extra["first"] = False
+        self._stats_add(user, ev, bool(extra.get("first")), key=login)
         if not extra.get("id"):
             # локальный id — для «сообщения на экран» и удаления (YouTube и т.п.)
             self._mid_seq = getattr(self, "_mid_seq", 0) + 1
@@ -4859,7 +5811,15 @@ class ChatOverlay(tk.Tk):
         is_mention = self._is_mention(user, msg or "", extra.get("login", ""))
         is_hl = is_mention or self._is_highlight(user, msg or "")
         self._log_message(tag, user, msg or "", emotes, extra=extra, is_hl=is_hl)
-        self._maybe_sound(bool(ev), is_hl, mention=is_mention)
+        self._maybe_sound(bool(ev) or bool(extra.get("first")), is_hl, mention=is_mention)
+        if self.translate_on and msg and not ev:
+            plain = msg
+            for a, b, _e in sorted(emotes or [], reverse=True):
+                plain = plain[:a] + " " + plain[b + 1:]
+            if needs_translation(plain, self.translate_to):
+                self._translator.request(extra["id"], plain.strip(), self.translate_to)
+            else:
+                self._translator.log(f"пропуск (не нужен перевод): {plain!r}")
         if self._obs_server:
             try:
                 payload = {
@@ -4877,9 +5837,228 @@ class ChatOverlay(tk.Tk):
                 }
                 if ev:
                     payload["event"] = ev
+                if extra.get("first") and not ev:
+                    payload["first"] = True
                 self._obs_server.hub.publish(payload)
             except Exception:
                 pass
+
+    # ---------------- статистика ----------------
+    def _stats_reset(self):
+        self._stats = {
+            "start": time.time(), "msgs": 0, "chatters": Counter(),
+            "names": {}, "first": [], "times": deque(maxlen=5000),
+            "subs": 0, "gifts": 0, "raids": 0, "bits": 0, "donations": 0,
+        }
+
+    def _stats_add(self, who: str, ev, first: bool, key: str = ""):
+        st = self._stats
+        now = time.time()
+        if ev:
+            et = ev.get("type")
+            if et == "sub":
+                st["subs"] += 1
+            elif et == "gift":
+                st["gifts"] += max(1, _safe_int(ev.get("amount", 1), 1))
+            elif et == "raid":
+                st["raids"] += 1
+            elif et == "cheer":
+                st["bits"] += _safe_int(ev.get("amount", 0), 0)
+            elif et == "donation":
+                st["donations"] += _safe_int(ev.get("amount", 0), 0)
+            return
+        st["msgs"] += 1
+        st["times"].append(now)
+        key = (key or who or "").lower()
+        st["chatters"][key] += 1
+        st["names"][key] = who
+        if first:
+            st["first"].append(who)
+
+    def _stats_rate(self) -> int:
+        cut = time.time() - 60
+        return sum(1 for t in self._stats["times"] if t >= cut)
+
+    def _on_translated(self, mid: str, text: str, lang: str):
+        self._log_system(f"Перевод ({lang or '?'}): {text}")
+        tk_tag = f"mid_{mid}"
+        rngs = self.text.tag_ranges(tk_tag)
+        if rngs:
+            end = rngs[-1]
+            pos = self.text.index(f"{end} -1c")      # перед завершающим \n
+            tags = [t for t in self.text.tag_names(f"{end} -2c")
+                    if t.startswith(("row_", "mid_", "usr_"))]
+            self.text.config(state="normal")
+            try:
+                self.text.tag_configure("tr", foreground=self.TEXT_MUTED,
+                                        font=self.fnt_sys, lmargin1=24, lmargin2=24)
+                label = f"\n↳ {text}" + (f"  ({lang})" if lang else "")
+                self.text.insert(pos, label, tuple(["tr"] + tags))
+                for t in tags:
+                    if t.startswith("row_"):
+                        self.text.tag_lower(t, "msg")
+            finally:
+                self.text.config(state="disabled")
+            self.text.see("end")
+        if self._obs_server:
+            self._obs_server.hub.translate(mid, text)
+
+    def _on_update_info(self, tag, url, manual):
+        self._update_info = (tag, url)
+        if tag:
+            try:
+                self.update_lbl.config(text=f"⬆ {tag}")
+                self.update_lbl.pack(side="right", before=self.count_lbl)
+            except Exception:
+                pass
+        cb = getattr(self, "_update_cb", None)
+        if cb:
+            try:
+                cb(tag, url)
+            except Exception:
+                pass
+
+    def _da_redirect(self) -> str:
+        return f"http://127.0.0.1:{int(self._obs_port)}/da/callback"
+
+    def _on_donation(self, it: dict):
+        name = (it.get("username") or "").strip() or "Аноним"
+        try:
+            amount = float(it.get("amount") or 0)
+        except Exception:
+            amount = 0.0
+        amt = int(amount) if amount == int(amount) else round(amount, 2)
+        cur = str(it.get("currency") or "RUB")
+        sym = {"RUB": "₽", "USD": "$", "EUR": "€", "UAH": "₴", "KZT": "₸", "BYN": "Br"}.get(cur, cur)
+        msg = it.get("message") or ""
+        if it.get("message_type") == "audio":
+            msg = "🎤 голосовое сообщение"
+        ev = {"type": "donation", "text": f"{name} — {amt} {sym}",
+              "amount": int(round(amount)), "currency": sym}
+        extra = {"event": ev, "login": "da_" + name.lower(), "id": f"da{it.get('id', '')}"}
+        if not self.show_donations:
+            if self._obs_server:
+                self._obs_server.record_event(ev, name)
+            self._stats_add(name, ev, False)
+            return
+        self._handle_chat("donationalerts:da", name, msg, [], extra)
+
+    def _update_count_lbl(self):
+        try:
+            self.count_lbl.config(
+                text=f"{self._msg_count} сообщ · {self._stats_rate()}/мин  📊")
+        except Exception:
+            pass
+
+    def _tick_count_lbl(self):
+        self._update_count_lbl()
+        self.after(5000, self._tick_count_lbl)
+
+    def _open_stats(self):
+        """Окно статистики чата (обновляется каждые 2 с)."""
+        if getattr(self, "_stats_win", None) and self._stats_win.winfo_exists():
+            self._stats_win.lift()
+            return
+        win = tk.Toplevel(self)
+        self._stats_win = win
+        win.title("Статистика чата")
+        win.configure(bg=self.BG)
+        win.attributes("-topmost", True)
+        win.resizable(False, False)
+        try:
+            x = self.winfo_rootx() + 30
+            y = self.winfo_rooty() + 30
+            win.geometry(f"420x560+{x}+{y}")
+        except Exception:
+            pass
+        outer = tk.Frame(win, bg=self.BG, padx=16, pady=12)
+        outer.pack(fill="both", expand=True)
+        head = tk.Frame(outer, bg=self.BG)
+        head.pack(fill="x")
+        tk.Label(head, text="📊  Статистика чата", bg=self.BG, fg=self.TEXT,
+                 font=("Segoe UI Semibold", 12)).pack(side="left")
+        dur_lbl = tk.Label(head, bg=self.BG, fg=self.TEXT_DIM, font=("Segoe UI", 9))
+        dur_lbl.pack(side="right")
+
+        grid = tk.Frame(outer, bg=self.BG)
+        grid.pack(fill="x", pady=(10, 0))
+        tiles = {}
+        spec = [("msgs", "сообщений", self.TEXT), ("rate", "в минуту", self.ACCENT),
+                ("chatters", "пишут", self.TEXT), ("first", "новичков", self.OK),
+                ("subs", "подписок", "#a970ff"), ("gifts", "подарено", "#ff6bcb"),
+                ("raids", "рейдов", "#ff9f1c"), ("bits", "битсов", "#f5c518"),
+                ("donations", "донатов, ₽", "#f57d07")]
+        for i, (key, label, col) in enumerate(spec):
+            t = tk.Frame(grid, bg=self.BG_ELEV, padx=10, pady=8,
+                         highlightthickness=1, highlightbackground=self.BORDER)
+            t.grid(row=i // 4, column=i % 4, padx=3, pady=3, sticky="nsew")
+            v = tk.Label(t, text="0", bg=self.BG_ELEV, fg=col,
+                         font=("Segoe UI Semibold", 15))
+            v.pack(anchor="w")
+            tk.Label(t, text=label, bg=self.BG_ELEV, fg=self.TEXT_DIM,
+                     font=("Segoe UI", 8)).pack(anchor="w")
+            tiles[key] = v
+        for c in range(4):
+            grid.grid_columnconfigure(c, weight=1, uniform="st")
+
+        tk.Label(outer, text="САМЫЕ АКТИВНЫЕ", bg=self.BG, fg=self.TEXT_DIM,
+                 font=("Segoe UI Semibold", 8)).pack(anchor="w", pady=(14, 4))
+        top = tk.Canvas(outer, height=250, bg=self.BG, highlightthickness=0, bd=0)
+        top.pack(fill="x")
+
+        tk.Label(outer, text="НОВЫЕ ЗРИТЕЛИ", bg=self.BG, fg=self.TEXT_DIM,
+                 font=("Segoe UI Semibold", 8)).pack(anchor="w", pady=(8, 2))
+        first_lbl = tk.Label(outer, bg=self.BG, fg=self.OK, anchor="w", justify="left",
+                             wraplength=380, font=("Segoe UI", 9))
+        first_lbl.pack(fill="x")
+
+        def _reset():
+            self._stats_reset()
+            refresh(reschedule=False)
+
+        rb = tk.Label(outer, text="Сбросить", bg=self.BG_INPUT, fg=self.TEXT_MUTED,
+                      padx=12, pady=5, cursor="hand2", font=("Segoe UI Semibold", 9))
+        rb.pack(side="bottom", anchor="e", pady=(8, 0))
+        rb.bind("<Button-1>", lambda e: _reset())
+        self._hover(rb, self.BG_INPUT, self.BORDER, self.TEXT_MUTED, self.TEXT)
+
+        def refresh(reschedule=True):
+            if not win.winfo_exists():
+                return
+            st = self._stats
+            mins = int((time.time() - st["start"]) // 60)
+            dur_lbl.config(text=f"за {mins // 60} ч {mins % 60} мин" if mins >= 60
+                           else f"за {mins} мин")
+            vals = {"msgs": st["msgs"], "rate": self._stats_rate(),
+                    "chatters": len(st["chatters"]), "first": len(st["first"]),
+                    "subs": st["subs"], "gifts": st["gifts"],
+                    "raids": st["raids"], "bits": st["bits"],
+                    "donations": st.get("donations", 0)}
+            for k, v in vals.items():
+                tiles[k].config(text=str(v))
+            top.delete("all")
+            items = st["chatters"].most_common(10)
+            w = max(top.winfo_width(), 380)
+            mx = items[0][1] if items else 1
+            for i, (k, n) in enumerate(items):
+                y = i * 25
+                bw = max(4, int((w - 150) * n / mx))
+                self._ui_round_rect(top, 110, y + 4, 110 + bw, y + 20, 4,
+                                    fill=_blend_color(self.BG, self.ACCENT, 0.55), outline="")
+                top.create_text(0, y + 12, anchor="w", fill=self.TEXT,
+                                text=st["names"].get(k, k)[:16], font=("Segoe UI", 9))
+                top.create_text(116 + bw, y + 12, anchor="w", fill=self.TEXT_MUTED,
+                                text=str(n), font=("Segoe UI Semibold", 9))
+            if not items:
+                top.create_text(0, 12, anchor="w", fill=self.TEXT_DIM,
+                                text="пока никто не писал", font=("Segoe UI", 9))
+            fl = st["first"][-12:]
+            first_lbl.config(text=", ".join(fl) if fl else "—")
+            if reschedule:
+                win.after(2000, refresh)
+
+        refresh()
+        win.bind("<Escape>", lambda e: win.destroy())
 
     _MENTION_RE = re.compile(r"@([\w]+)", re.UNICODE)
 
@@ -5077,6 +6256,41 @@ class ChatOverlay(tk.Tk):
                         info = payload
                     if self.mod_sync and isinstance(info, dict):
                         self._apply_moderation(info)
+
+                elif kind == "translated":
+                    try:
+                        self._on_translated(*payload)
+                    except Exception as e:
+                        self._translator.log(f"ошибка вставки перевода: {e!r}")
+
+                elif kind == "donation":
+                    try:
+                        self._on_donation(payload)
+                    except Exception as e:
+                        self._log_system(f"DonationAlerts: {e}")
+
+                elif kind == "da_status":
+                    st, txt = payload
+                    self._log_system(f"DonationAlerts: {txt}")
+                    cb = self._da_status_cb
+                    if cb:
+                        try:
+                            cb(st, txt)
+                        except Exception:
+                            self._da_status_cb = None
+
+                elif kind == "translate_skip":
+                    self._log_system(f"Перевод не нужен ({payload[1] or '?'}): {payload[0]}")
+
+                elif kind == "translate_error":
+                    self._log_system(f"Перевод: ошибка — {payload}")
+                    self._set_status_raw("warn", "⚠ перевод не работает — см. Настройки → Ещё")
+
+                elif kind == "update":
+                    try:
+                        self._on_update_info(*payload)
+                    except Exception:
+                        pass
 
                 elif kind == "room":
                     tag, rid = payload if isinstance(payload, tuple) else ("", payload)

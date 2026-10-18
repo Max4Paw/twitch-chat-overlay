@@ -58,6 +58,7 @@
       else if (p.kind === "clear") R.clear();
       else if (p.kind === "delete") R.remove(p.mid);
       else if (p.kind === "clear_user") R.removeUser(p.login);
+      else if (p.kind === "translate") R.translate(p.mid, p.text);
     }
     async function loadHistory() {
       try {

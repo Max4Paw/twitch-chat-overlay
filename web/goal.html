@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Цель стрима (OBS)</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
+    body { display: flex; align-items: center; justify-content: center; padding: 12px; box-sizing: border-box; }
+    .goal { width: 100%; max-width: 900px; box-sizing: border-box; padding: 14px 18px 16px; border-radius: 16px;
+            background: rgba(14, 15, 26, .78); border: 1px solid rgba(255,255,255,.08);
+            box-shadow: 0 8px 24px rgba(0,0,0,.35); color: #fff; font-family: var(--font), "Segoe UI", system-ui, sans-serif; }
+    .top { display: flex; align-items: baseline; gap: 12px; margin-bottom: 10px; }
+    .title { font-weight: 800; font-size: 20px; flex: 1; text-shadow: 0 1px 2px rgba(0,0,0,.6); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .num { font-weight: 800; font-size: 20px; font-variant-numeric: tabular-nums; }
+    .num small { opacity: .6; font-weight: 600; }
+    .track { position: relative; height: 22px; border-radius: 11px; background: rgba(255,255,255,.10); overflow: hidden; }
+    .fill { position: absolute; inset: 0 auto 0 0; width: 0; border-radius: 11px;
+            background: linear-gradient(90deg, var(--c), var(--c2)); box-shadow: 0 0 16px var(--cg);
+            transition: width .9s cubic-bezier(.2,.8,.2,1); }
+    .fill::after { content: ""; position: absolute; inset: 0; border-radius: inherit;
+                   background: linear-gradient(90deg, transparent, rgba(255,255,255,.35), transparent);
+                   background-size: 200% 100%; animation: shine 2.4s linear infinite; }
+    @keyframes shine { from { background-position: 200% 0 } to { background-position: -200% 0 } }
+    .pct { position: absolute; right: 10px; top: 0; bottom: 0; display: flex; align-items: center; font-weight: 800; font-size: 12px; text-shadow: 0 1px 2px rgba(0,0,0,.7); }
+    .done .title::after { content: "  🎉 Цель достигнута!"; color: var(--c2); }
+    .bump { animation: bump .6s ease; }
+    @keyframes bump { 40% { transform: scale(1.03); } }
+  </style>
+</head>
+<body>
+  <div class="goal" id="g">
+    <div class="top"><div class="title" id="title">Цель стрима</div><div class="num" id="num">0 <small>/ 10</small></div></div>
+    <div class="track"><div class="fill" id="fill"></div><div class="pct" id="pct">0%</div></div>
+  </div>
+  <script>
+  (function () {
+    const $ = (id) => document.getElementById(id);
+    const unit = { subs: "подписок", bits: "битсов", donations: "₽" };
+    function hexRgb(h) { const n = parseInt(String(h || "#a970ff").slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; }
+    let last = -1;
+    function render(g) {
+      const c = hexRgb(g.color);
+      const light = c.map((v) => Math.round(v + (255 - v) * .35));
+      const root = $("g");
+      root.style.setProperty("--c", g.color);
+      root.style.setProperty("--c2", `rgb(${light.join(",")})`);
+      root.style.setProperty("--cg", `rgba(${c.join(",")},.55)`);
+      const cur = Number(g.current) || 0, tgt = Math.max(1, Number(g.target) || 1);
+      const pct = Math.min(100, Math.round(cur * 100 / tgt));
+      $("title").textContent = g.title || "Цель стрима";
+      $("num").innerHTML = `${cur} <small>/ ${tgt} ${unit[g.type] || ""}</small>`;
+      $("fill").style.width = pct + "%";
+      $("pct").textContent = pct + "%";
+      root.classList.toggle("done", cur >= tgt);
+      if (last >= 0 && cur > last) { root.classList.remove("bump"); void root.offsetWidth; root.classList.add("bump"); }
+      last = cur;
+    }
+    async function load() {
+      try { const r = await fetch("/obs/goal.json", { cache: "no-store" }); if (r.ok) render(await r.json()); } catch (e) {}
+    }
+    async function font() {
+      try {
+        const r = await fetch("/obs/style.json", { cache: "no-store" });
+        const s = ChatStyle.normalize(r.ok ? await r.json() : {});
+        ChatStyle.ensureFont(s.text.font);
+        document.documentElement.style.setProperty("--font", `"${s.text.font}"`);
+      } catch (e) {}
+    }
+    function connect() {
+      const es = new EventSource("/obs/events");
+      es.onmessage = (e) => { try { const p = JSON.parse(e.data); if (p.kind === "goal") load(); if (p.kind === "style") font(); } catch (err) {} };
+      es.onerror = () => { try { es.close(); } catch (err) {} setTimeout(connect, 1500); };
+    }
+    const sc = document.createElement("script"); sc.src = "/obs/overlay.js"; sc.onload = font; document.head.appendChild(sc);
+    load().then(connect);
+  })();
+  </script>
+</body>
+</html>

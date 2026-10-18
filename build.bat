@@ -4,7 +4,28 @@ REM  Сборка Twitch Chat Overlay в один .exe с правильной �
 REM  В конце автоматически сбрасывается кэш иконок Windows.
 REM ============================================================
 
+chcp 65001 >nul
 cd /d "%~dp0"
+
+REM ---- защита от сборки из старой версии файла ----
+REM build_check.sha256 пишется вместе с новой версией chat_overlay.py.
+REM Если редактор (PyCharm) перезаписал файл старой копией — сборка остановится.
+REM Правите код сами? Просто удалите build_check.sha256.
+if not exist build_check.sha256 goto :hash_ok
+for /f "usebackq delims=" %%h in (`powershell -NoProfile -Command "(Get-FileHash -Algorithm SHA256 'chat_overlay.py').Hash"`) do set "CUR_HASH=%%h"
+set /p EXP_HASH=<build_check.sha256
+if /i "%CUR_HASH%"=="%EXP_HASH%" goto :hash_ok
+echo.
+echo ===========================================================
+echo  [СТОП] chat_overlay.py не совпадает с последней версией!
+echo  Скорее всего, PyCharm перезаписал его старой копией.
+echo  1) Закройте вкладку chat_overlay.py в PyCharm (не сохраняя)
+echo  2) Верните свежий файл (из чата с Claude) и запустите сборку снова
+echo  Если вы сами меняли код - удалите файл build_check.sha256
+echo ===========================================================
+pause
+exit /b 1
+:hash_ok
 
 if not exist assets\icon.ico (
     echo [ERR] Не найден assets\icon.ico — сборка остановлена.

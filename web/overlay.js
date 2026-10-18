@@ -52,12 +52,15 @@
       vip:         { enabled: false, color: "#e005b9", plate: false, opacity: 0.85, border: true, nick: false },
     },
     featured: { scale: 1.6, duration: 15, position: "bottom" },
+    first: { enabled: true, color: "#3ddc84" },
+    translate: { enabled: true },
+    recent: { items: ["sub", "gift", "raid", "donation", "topdon"], layout: "column" },
     events: {
       enabled: true,        // показывать сабки/гифты/рейды/битсы
       frame: true,          // рамка и свечение цветом события
       big: true,            // заголовок события крупнее текста
       colors: { sub: "#a970ff", gift: "#ff6bcb", raid: "#ff9f1c",
-                cheer: "#f5c518", announcement: "#4fc3f7", other: "#8b91a7" },
+                cheer: "#f5c518", announcement: "#4fc3f7", donation: "#f57d07", other: "#8b91a7" },
     },
   };
 
@@ -337,6 +340,16 @@
     if (s.plate.type === "image") css.push(`.msg.role.rb > .bg{filter:drop-shadow(0 0 2px var(--rc)) drop-shadow(0 0 8px var(--rcg))}`);
     else if (s.plate.type !== "none") css.push(`.msg.role.rb > .bg{box-shadow:inset 0 0 0 2px var(--rc), 0 0 14px var(--rcg)}`);
     else css.push(`.msg.role.rb .nick{text-shadow:0 0 8px var(--rcg)}`);
+    const F = s.first || {};
+    css.push(`.firstb{display:none}`);
+    if (F.enabled) {
+      const fc = hexRgb(F.color || "#3ddc84");
+      css.push(`.msg.first .firstb{display:inline-flex;align-items:center;gap:.25em;padding:.05em .45em;border-radius:.4em;` +
+        `font-size:.72em;font-weight:800;background:${rgba(fc, .22)};color:${F.color};margin-right:.35em;vertical-align:middle}`);
+      if (s.plate.type === "color" || s.plate.type === "gradient")
+        css.push(`.msg.first > .bg{box-shadow:inset 0 0 0 2px ${rgba(fc, .9)}, 0 0 14px ${rgba(fc, .45)}}`);
+    }
+    css.push(`.tr{display:${(s.translate || {}).enabled === false ? "none" : "block"};font-size:.82em;opacity:.8;font-style:italic;margin-top:.15em}`);
     if (s.hl && s.hl.enabled) {
       const h = hexRgb(s.hl.color);
       if (s.plate.type === "none") css.push(`.msg.hl .text{color:${s.hl.color}}`);
@@ -377,7 +390,7 @@
   @keyframes out-fade{from{opacity:1}to{opacity:0;transform:translateY(-6px)}}
   `;
 
-  const EV_ICONS = { sub: "★", gift: "🎁", raid: "⚑", cheer: "◆", announcement: "📣", other: "•" };
+  const EV_ICONS = { sub: "★", gift: "🎁", raid: "⚑", cheer: "◆", announcement: "📣", donation: "💰", other: "•" };
 
   const BADGES = {
     broadcaster: ["#e91916", '<path d="M3 6h12v12H3zM16 10l5-3v10l-5-3z"/>'],
@@ -500,7 +513,7 @@
       const ev = p.event && style.events && style.events.enabled ? p.event : null;
       if (p.event && !ev && !(p.msg || "").trim()) return null;   // события выключены
       const m = doc.createElement("div");
-      m.className = "msg a-" + (L.anim || "fade") + (p.hl ? " hl" : "") +
+      m.className = "msg a-" + (L.anim || "fade") + (p.hl ? " hl" : "") + (p.first ? " first" : "") +
         (ev ? " ev ev-" + (ev.type || "other") + ((p.msg || "").trim() ? "" : " nomsg") : "");
       if (p.mid) m.dataset.mid = p.mid;
       m.dataset.login = (p.login || p.user || "").toLowerCase();
@@ -535,7 +548,8 @@
       const nbg = doc.createElement("span"); nbg.className = "bg";
       const nname = doc.createElement("span"); nname.textContent = p.user || "";
       nick.append(nbg, nname);
-      head.append(time, plat, badges, nick);
+      const fb = doc.createElement("span"); fb.className = "firstb"; fb.textContent = "👋 новичок";
+      head.append(time, plat, badges, fb, nick);
       if (L.sep && !L.stacked) {
         const sep = doc.createElement("span"); sep.className = "sep"; sep.textContent = L.sep;
         head.appendChild(sep);
@@ -554,6 +568,7 @@
         evh.append(ic, et);
       }
       m.append(bg, acEl, evh, head, text);
+      if (p.tr) { const tr = doc.createElement("div"); tr.className = "tr"; tr.textContent = "↳ " + p.tr; m.appendChild(tr); }
       container.appendChild(m);
       trim();
 
@@ -599,13 +614,20 @@
     function removeWhere(fn) {
       for (const m of Array.from(container.children)) if (fn(m)) m.remove();
     }
+    function translate(mid, txt) {
+      for (const m of Array.from(container.children)) {
+        if (m.dataset.mid !== mid || m.querySelector(".tr")) continue;
+        const tr = doc.createElement("div"); tr.className = "tr"; tr.textContent = "↳ " + txt;
+        m.appendChild(tr);
+      }
+    }
     function remove(mid) { if (mid) removeWhere((m) => m.dataset.mid === mid); }
     function removeUser(login) {
       login = String(login || "").toLowerCase();
       if (login) removeWhere((m) => m.dataset.login === login && !m.classList.contains("ev"));
     }
     setStyle({});
-    return { add, setStyle, clear, remove, removeUser, get style() { return style; } };
+    return { add, setStyle, clear, remove, removeUser, translate, get style() { return style; } };
   }
 
   // ---------- Демо-сообщения ----------
@@ -618,12 +640,16 @@
     { user: "TheRealDmitry", color: "#daa520", badges: [], msg: "первый раз на стриме, очень уютно тут" },
     { user: "kot_v_sapogah", color: "#8a2be2", badges: ["founder"], msg: "это сообщение подлиннее, чтобы посмотреть как плашка растягивается на несколько строк текста и не ломается" },
     { user: "sam", color: "#00ff7f", badges: [], msg: "LUL", hl: true },
+    { user: "new_viewer", color: "#3ddc84", badges: [], msg: "привет, я тут впервые!", first: true },
+    { user: "john_us", color: "#4fc3f7", badges: [], msg: "hello from USA, nice stream!", tr: "привет из США, классный стрим!" },
     { user: "lena_draws", color: "#ff69b4", badges: ["subscriber"], msg: "уже полгода с вами!",
       event: { type: "sub", text: "lena_draws продлил подписку — 6 мес." } },
     { user: "night_owl", color: "#1e90ff", badges: ["moderator"], msg: "",
       event: { type: "gift", text: "night_owl дарит чату подписки: 5 шт." } },
     { user: "pixelpanda", color: "#9acd32", badges: [], msg: "",
       event: { type: "raid", text: "Рейд! pixelpanda и 42 зрителей" } },
+    { user: "Щедрый зритель", color: "", badges: [], msg: "на новый микрофон 🎤",
+      event: { type: "donation", text: "Щедрый зритель — 500 ₽" } },
   ];
   function demoMessage(i) {
     const d = DEMO[i % DEMO.length];
